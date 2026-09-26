@@ -33,6 +33,66 @@
 
 create schema if not exists auth;
 
+-- Los ROLES que espera el resto del SQL
+-- Las politicas de la migracion 001 son "TO authenticated" y el test hace
+-- "set local role authenticated", asi que sin esto la migracion ni siquiera
+-- aplica: "no existe el rol authenticated". Supabase los crea al montar el
+-- proyecto; un PostgreSQL normal no, hay que recrearlos.
+--
+-- NOLOGIN porque no son usuarios: son identidades de aplicacion. El que entra es
+-- `postgres` (o el `authenticator` de Supabase) y luego cambia de rol con SET
+-- ROLE, que es lo que hace el gateway al recibir una peticion con el JWT.
+--
+-- POR QUE ESTO ES UN `do $$` Y NO UN `create role` A SECO
+-- Los roles son de CLUSTER, no de base de datos. `drop database` que hace
+-- `pnpm db:reset` borra la base entera pero deja los roles vivos, asi que a la
+-- segunda ejecucion un `create role anon` revienta con "el rol ya existe" y el
+-- reset se queda a medias. Hay que consultar `pg_roles` y crear o ajustar segun
+-- lo que haya.
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then
+    create role anon nologin;
+  end if;
+
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+    create role authenticated nologin;
+  end if;
+
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then
+    create role service_role nologin bypassrls;
+  else
+    -- Por si alguien lo creo sin bypassrls en un intento anterior.
+    alter role service_role bypassrls;
+  end if;
+end
+$$;
+
+grant usage on schema public to anon, authenticated, service_role;
+
+-- Y sobre el esquema `auth`, que es donde viven `jwt()`, `uid()` y `role()`.
+-- Sin esto las politicas dan "permiso denegado al esquema auth" al evaluarse, y
+-- lo peligroso es que un INSERT asi se rechaza por un error de permisos en vez
+-- de por la politica: el test veria "rechazado" y pasaria sin haber probado RLS.
+grant usage on schema auth to anon, authenticated, service_role;
+
+-- Permisos por defecto, igual que en Supabase. Al declararlos aqui, cada tabla
+-- que cree la migracion los hereda sola; si el shim viviera despues de las
+-- migraciones habria que concederlos tabla por tabla y el proxima forgot.
+-- OJO: solo aplican a objetos que cree el MISMO rol que ejecuta este ALTER, y las
+-- migraciones tambien las ejecuta `postgres`, asi que encajan.
+alter default privileges in schema public
+  grant select on tables to anon, authenticated;
+alter default privileges in schema public
+  grant insert, update, delete on tables to authenticated;
+alter default privileges in schema public
+  grant all on tables to service_role;
+
+comment on role anon is 'Shim local. En produccion la crea Supabase.';
+comment on role authenticated is 'Shim local. En produccion la crea Supabase.';
+comment on role service_role is
+  'Shim local. Unico rol con BYPASSRLS: webhook de Stripe y cron. Ver cabecera.';
+
 -- El JWT completo. De aqui sale `tenant_id`.
 -- `request.jwt.claim` es el setting legacy de un solo claim; `request.jwt.claims`
 -- es el payload entero en JSON. Supabase usa este ultimo. Se leen ambos para no
@@ -43,10 +103,10 @@ language sql
 stable
 as $$
   select coalesce(
-    nullif(current_setting('request.jwt.claims', true), ''),
-    nullif(current_setting('request.jwt.claim', true), ''),
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb,
+    nullif(current_setting('request.jwt.claim', true), '')::jsonb,
     '{}'::jsonb
-  )::jsonb
+  )
 $$;
 
 comment on function auth.jwt() is

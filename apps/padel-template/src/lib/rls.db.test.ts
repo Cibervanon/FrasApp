@@ -146,19 +146,38 @@ describe("RLS: aislamiento entre tenants", () => {
               ? "feature_key, enabled"
               : "content_key, value";
 
+        // El valor de `tenant_content` es jsonb, y un jsonb tiene que ser JSON
+        // VALIDO. Aqui se cierra con comillas dobles para que sea la cadena
+        // "club", no la palabra suelta `club`: un jsonb tiene que empezar por
+        // comilla, objeto o array. Con 'club'::jsonb Postgres responde
+        // "invalid input syntax for type json", que es OTRO error, y el test
+        // pasaba verde porque aceptaba cualquier error como rechazo valido.
         const values =
           table === "tenant_content"
-            ? ["about_club", "'y'::jsonb"]
+            ? ["'about_club'", `'"club"'::jsonb`]
             : table === "tenant_features"
               ? ["'news'", "true"]
               : ["'#333333'", "'#333333'", "'Inter'", "'Club'", "'padel@example.test'"];
 
+        // `.rejects.toThrow()` a secas aceptaria CUALQUIER error como un rechazo
+        // valido, y durante el desarrollo ese test paso verde con
+        // "permiso denegado al esquema auth": la fila se rechazaba por permisos,
+        // no por la politica, y el test no lo notaba. Un test que pasa por el
+        // motivo equivocado es peor que uno rojo, porque informa de que el RLS
+        // esta bien cuando en realidad no se probo.
+        //
+        // Postgres dice exactamente `new row violates row-level security policy`,
+        // en español "viola la politica de seguridad de registros". Se aceptan las
+        // dos formas porque el idioma lo decide el locale del servidor, no el del
+        // proyecto, y un test que depende del idioma del servidor es fragil.
         await expect(
           a.query(
             `insert into public.${table} (tenant_id, ${columns}) values ($1, ${values.join(", ")})`,
             [TENANT_B],
           ),
-        ).rejects.toThrow();
+        ).rejects.toThrow(
+          /violates row-level security policy|viola la pol[ií]tica de seguridad/i,
+        );
       } finally {
         await a.query("rollback");
         await a.end();

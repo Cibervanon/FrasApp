@@ -62,15 +62,21 @@ Phase 3
 - [ ] Revision de seguridad en las 9 tareas marcadas `[SEG]`
 - [ ] Dividir T13 antes de empezarla (alcance L)
 - [ ] **T0 completa**: monorepo, tooling, 3 packages, app Next 16, 12 tests
-- [ ] **T1 BLOQUEADA**: migracion, seed y test de RLS escritos, pero sin ejecutar. Falta
-      Postgres (Docker + Supabase CLI, requiere admin). `pnpm test:db` da ECONNREFUSED
-- [ ] T0 y T1 han cerrado el config-schema contra la tabla real: 7 feature_keys de la spec,
-      branding de 8 columnas, tramos con `label`
+- [x] **T1 completa y VERIFICADA contra Postgres real**: migracion 001 aplicada, seed
+      aplicada, 12 tests de RLS en verde, `pnpm verify` al completo
+- [x] config-schema alineado con la tabla real: 7 feature_keys, branding de 8 columnas,
+      tramos con `label`
 - **Status:** in_progress
 
-**Bloqueo actual:** `pnpm db:reset` y `pnpm test:db` no pueden ejecutarse. Requiere
-instalar WSL2 + Docker Desktop + Supabase CLI desde una consola de administrador.
-T1 sigue ABIERTA: la migracion no se ha ejecutado ni una vez.
+**Tarea actual: T2** (tipos de dominio del nucleo). **Checkpoint 0 cerrado**: el
+aislamiento entre tenants esta probado de verdad, no con mocks.
+
+**Decisiones de infraestructura tomadas en T1** (ver `Decisions Made`): PostgreSQL
+nativo 17 en local en vez de Docker, `pnpm db:reset` propio, shim de `auth` recreando
+lo que monta Supabase.
+
+**Pendiente de decidir con el usuario, no bloquea:** PostgreSQL local escucha en `*`
+con clave `postgres`, o sea en todas las interfaces de red.
 
 ### Phase 5: VERIFY
 
@@ -122,6 +128,10 @@ VERI\*FACTU que solo aplica al modulo de facturacion (fuera del MVP).
 | **Dominio de email unico y compartido** (OQ-12) | Un dueno de club no puede configurar SPF/DKIM. Pedirselo es la friccion que el Documento 2 ya descarto |
 | **`application_fee_cents = 0`** (OQ-13) | El argumento de venta frente a Playtomic es "sin comision". Cobrar por transaccion lo contradiria. Columna conservada por si se pacta otra cosa con un cliente |
 | Ingreso = setup fee + cuota mensual, no por cobro | Decision de negocio del usuario. El setup fee y la cuota estan en el Documento 2 |
+| **PostgreSQL nativo 17 en local, no Docker** (T1) | El usuario no quiere que se le instale el kernel de WSL2 ni Docker en su equipo. Cuesta: `pg_cron` en Windows es dudoso (lo necesita T5) |
+| `pnpm db:reset` propio en vez de `supabase db reset` | Sin Docker no hay CLI de Supabase. El script aplica shim, migraciones y seed en ese orden, cada paso en su transaccion propia |
+| **Shim de `auth` recreando lo que monta Supabase** (T1) | Sin `auth.jwt()`/`uid()`/`role()` y los roles `anon`/`authenticated`/`service_role`, las politicas no aplican. El shim lee `current_setting('request.jwt.claims')` y es fail-closed: nunca mas permisivo que Supabase |
+| Exigir el error concreto en los tests de rechazo (T1) | `.rejects.toThrow()` sin argumento acepta cualquier error. Los INSERT pasaban verdes con `permiso denegado al esquema auth`: rechazados por permisos, no por politica |
 
 ## Errors Encountered
 
@@ -132,6 +142,14 @@ VERI\*FACTU que solo aplica al modulo de facturacion (fuera del MVP).
 | `git ls-remote` sin salida | 1 | Repo remoto existe pero vacio; sin codigo heredado |
 | Caracteres CJK corruptos en `findings.md` | 1 | Reparado; verificado ASCII/UTF-8 con script |
 | Caracteres CJK corruptos en la spec (3 sitios) | 1 | Reparado por indice; verificado 0 CJK y UTF-8 estricto valido |
+| `wsl --install -d Ubuntu` -> 403 | 1 | El instalador de Ubuntu viene del Store y ahi esta el bloqueo. Ademas Docker no necesita distribucion: solo el kernel |
+| `pg_hba.conf` con `scram-sha-256` y contrasena desconocida | 1 | El instalador de EBD en modo desatendido deja `postgres`. Comprobado |
+| `los tipos text y jsonb no son coincidentes en COALESCE` | 1 | `nullif(text,text)` devuelve text y no castea solo. Hay que castear cada rama: `nullif(...)::jsonb` |
+| `no existe el rol "authenticated"` | 1 | Supabase crea `anon`/`authenticated`/`service_role`; Postgres normal no. Van en el shim |
+| `permiso denegado al esquema auth` | 1 | Faltaba `grant usage on schema auth` a los tres roles. Y hacia que los tests de INSERT fueran verdes por el motivo equivocado |
+| `el rol "anon" ya existe` al segundo `db:reset` | 1 | Los roles son de CLUSTER, no de base de datos: `drop database` no los borra. El shim tiene que ser idempotente con `pg_roles` |
+| `Falta PGPASSWORD` en el test pese a existir `.env.local` | 1 | `import.meta.url` no es ruta de fichero en los setupFiles de Vitest, el directorio calculado no existia y el `existsSync` callaba. Ahora usa `process.cwd()` |
+| `.gitignore` de T0 sin efecto en la app | 1 | Un patron con `/` interno se ancla a la raiz: `supabase/.temp/` no cubria `apps/padel-template/supabase/.temp/`. Corregido a `**/supabase/...` |
 
 ## Notes
 

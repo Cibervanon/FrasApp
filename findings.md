@@ -289,6 +289,126 @@ Y la regla general que sale de aqui: en un monorepo, todo patron con ruta en
 `.gitignore` necesita `**/` delante. La excepcion es un patron de una sola
 segmentacion (`node_modules/`, `dist/`), que ya es global.
 
+## `.rejects.toThrow()` sin argumento acepta CUALQUIER error (T1, el mas grave)
+
+El test de RLS comprobaba que un INSERT con `tenant_id` ajeno fuese rechazado asi:
+
+```ts
+await expect(a.query(...)).rejects.toThrow();   // cualquiera
+```
+
+Durante el desarrollo ese test dio **verde con "permiso denegado al esquema auth"**.
+La fila se rechazaba porque al rol le faltaba un GRANT, no porque la politica de
+RLS hiciera su trabajo. El test informaba de que el RLS estaba bien cuando en
+realidad no se habia probado.
+
+Es la trampa de siempre: un assert que acepta cualquier resultado no prueba nada,
+solo que *algo* fallo. Y en seguridad, un test que pasa por el motivo equivocado
+es peor que uno rojo, porque da confianza para seguir.
+
+Arreglado exigiendo el error concreto:
+
+```ts
+).rejects.toThrow(
+  /violates row-level security policy|viola la pol[ií]tica de seguridad/i,
+);
+```
+
+El idioma lo pone el locale del servidor, no el del proyecto, asi que van las dos
+formas: un test que depende del idioma del servidor se rompe al cambiar de
+maquina.
+
+**Y al endurecerlo saltó un segundo bug que el assert flojo tapaba**: el test
+insertaba `'y'::jsonb` en `tenant_content`, y `y` no es JSON valido, asi que
+Postgres contestaba `invalid input syntax for type json`. Otro error distinto, otra
+vez aceptado como si el RLS hubiera hecho su trabajo. El valor correcto es una
+cadena JSON: `'"club"'::jsonb`.
+
+## Un test verde no prueba que sirva. El control negativo si (T1)
+
+12 de 12 en verde no demuestra que los tests midan el RLS. Para comprobarlo,
+comente el `grant usage on schema auth` del shim, ejecute `db:reset` y mire:
+
+- **10 de 12 tests caen.** Dependen de verdad del shim.
+- **2 sobreviven:** los estructurales (RLS activada y forzada, 4 politicas por
+  tabla), que no evaluan `auth.jwt()`. Correcto que sobrevivan.
+
+Si hubieran sobrevivido los 12, los tests serian decorativos. Este control cuesta
+30 segundos y es la unica forma de saber que un test verde significa algo.
+
+## Supabase monta cosas que un PostgreSQL normal no tiene (T1)
+
+El shim de `auth` no era solo `jwt()`, `uid()` y `role()`. Faltaban tres cosas, y
+cada una daba un error distinto:
+
+1. **Los ROLES.** Las politicas son `TO authenticated` y el test hace
+   `set local role authenticated`. Sin `create role anon/authenticated/service_role`
+   la migracion ni aplica: `no existe el rol "authenticated"`. `service_role` es el
+   unico con `bypassrls`, que es justo por lo que la migracion pone `FORCE ROW
+   LEVEL SECURITY`.
+2. **Los GRANT por defecto.** `alter default privileges in schema public`, igual
+   que Supabase, para que cada tabla nueva los herede sin concederlos a mano.
+   Solo aplican a objetos del mismo rol que ejecuta el ALTER; como el shim y las
+   migraciones los ejecuta `postgres`, encajan.
+3. **`grant usage on schema auth`.** Sin esto, evaluar una politica da
+   `permiso denegado al esquema auth`. Y aqui esta el punto 1 de este fichero: eso
+hacia que los INSERT fuesen rechazados por permisos y los tests pareciesen bien.
+
+## Los roles son de CLUSTER, no de base de datos (T1)
+
+`pnpm db:reset` hace `drop database` y la crea de cero, pero los roles que creo el
+shim **sobreviven**: son objetos de cluster. A la segunda ejecucion, un
+`create role anon` a pelo revienta con `el rol "anon" ya existe` y el reset se
+queda a medias.
+
+El shim tiene que ser idempotente: consultar `pg_roles` y crear o ajustar.
+
+```sql
+do $$ begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then
+    create role anon nologin;
+  end if;
+end $$;
+```
+
+## `import.meta.url` no es una ruta de fichero en los setupFiles de Vitest (T1)
+
+El `setup-env.ts` que carga `.env.local` usaba
+`resolve(dirname(fileURLToPath(import.meta.url)), "..")` para localizar la app. En
+el module runner de Vitest eso **no da una ruta real**, el directorio calculado no
+existia, y el `existsSync` devolvia `false` sin decir nada. Resultado: los tests
+fallaban con `Falta PGPASSWORD` sin pista de por que.
+
+`process.cwd()` si es fiable, porque Turbo lanza cada tarea con el directorio del
+paquete. Y un fallo silencioso al cargar credenciales es el peor sitio posible
+para un fallo silencioso: parece un problema de configuracion del usuario.
+
+## Un instalador desatendido deja las cosas en un estado que no esperas (T1)
+
+`winget install --force -e --id PostgreSQL.PostgreSQL.17` se ejecuto sin pedir
+contraseña, y la instalacion anterior sobrevivio: el data dir seguia con la fecha
+del primer intento. Comprobado que la clave es `postgres`, el valor por defecto del
+instalador de EDB, y que `listen_addresses` queda en `*`, o sea escuchando en todas
+las interfaces de la red. En una maquina de desarrollo con red compartida eso no
+deberia quedarse asi; pendiente decidir con el usuario.
+
+## `COALESCE` no castea `text` a `jsonb` implicitamente (T1)
+
+Primer error real al ejecutar el shim contra Postgres de verdad:
+
+```sql
+coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}'::jsonb)
+-- ERROR: los tipos text y jsonb no son coincidentes en COALESCE
+```
+
+`nullif(text, text)` devuelve `text`, y Postgres no lo castea solo a `jsonb`. Hay
+que castear cada rama: `nullif(...)::jsonb`. El `::jsonb` de fuera no hace nada si
+el `coalesce` no resuelve antes.
+
+Moraleja: el shim estaba "claro" y aun asi no compilaba. Los tres ficheros
+anteriores de este seccion son el mismo patron, un tipo de codigo que se escribe
+leyendo y no ejecutando.
+
 ---
 
 *Actualizar durante la investigacion para no perder evidencia.*
