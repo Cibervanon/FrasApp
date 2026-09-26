@@ -24,7 +24,7 @@ apps/padel-template  Next.js App Router. Orquesta todo
 ```
 
 **Por que `core` es una libreria y no una carpeta dentro de la app:** el motor de precios
-y el de reembolso son lo unico que hay que verificar con exhausividad. Si vivieran en
+y el de reembolso son lo unico que hay que verificar con exhaustividad. Si vivieran en
 `app/lib`, cada test necesitaria arrancar Next y base de datos. Separados, corren con
 `vitest` en 40 ms y la cobertura del 100% es alcanzable de verdad.
 

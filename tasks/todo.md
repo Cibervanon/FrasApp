@@ -16,7 +16,7 @@ Leyenda: `[TDD]` = test-first obligatorio · `[SEG]` = requiere revision de segu
 
 ## Fase 0: Fundaciones
 
-### [ ] T0: Monorepo Turborepo + tooling
+### [x] T0: Monorepo Turborepo + tooling
 **Spec:** seccion 9 (estructura), 8 (comandos), 10 (estilo)
 
 **Descripcion:** Turborepo con `packages/ui`, `packages/core`, `packages/config-schema`,
@@ -37,7 +37,7 @@ tarea, se rellena en T6)
 
 ---
 
-### [ ] T1: Migracion inicial de tenancy `[TDD]` `[SEG]`
+### [x] T1: Migracion inicial de tenancy `[TDD]` `[SEG]`
 **Spec:** secciones 4.1, 7.1
 
 **Descripcion:** `tenants`, `tenant_branding`, `tenant_features`, `tenant_content` con RLS
@@ -68,7 +68,7 @@ ninguna fila de tenant B en las 3 tablas con RLS
 
 ---
 
-### [ ] T2: `packages/core` tipos + `config-schema` Zod
+### [x] T2: `packages/core` tipos + `config-schema` Zod
 **Spec:** secciones 4, 9 (regla de capas), 10
 
 **Descripcion:** Tipos del dominio (`Court`, `PricingRule`, `Booking`, `CancellationPolicy`,
@@ -76,26 +76,31 @@ ninguna fila de tenant B en las 3 tablas con RLS
 sin Supabase, sin `Date.now()`.
 
 **Criterios de aceptacion:**
-- [ ] `packages/core` no importa `react`, `next`, `@supabase/*` ni llama a `Date.now()`
-- [ ] `CancellationPolicy` valida que los tramos esten ordenados y sin solapes
-- [ ] El schema Zod rechaza un `primary_color` que no sea un color valido
-- [ ] `vitest` corre en `packages/core` sin cargar Next ni base de datos
+- [x] `packages/core` no importa `react`, `next`, `@supabase/*` ni llama a `Date.now()`
+- [x] `CancellationPolicy` valida que los tramos esten ordenados y sin solapes
+- [x] El schema Zod rechaza un `primary_color` que no sea un color valido
+- [x] `vitest` corre en `packages/core` sin cargar Next ni base de datos
 
 **Verificacion:** `pnpm test --filter @fras/core` · `grep -r "@supabase" packages/core` no
 devuelve nada
 
 **Depende de:** T0 · **Alcance:** M
 
+**Nota:** el nombre del paquete es `@frasapp/core`, no `@fras/core`; el comando real es
+`pnpm --filter @frasapp/core test`. El guard de limites de capas es
+`packages/core/src/boundaries.test.ts`, y tiene control negativo propio: se comprobó que
+detecta un `import` de React, un `Date.now()` y un `Math.random()` plantados en `src/`.
+
 ---
 
 ### Checkpoint 0
-- [ ] `pnpm install` y `pnpm build` limpios
-- [ ] `pnpm db:reset` aplica migraciones sin error
-- [ ] Un JWT de tenant A no lee nada de tenant B en las **3 tablas con RLS**
+- [x] `pnpm install` y `pnpm build` limpios
+- [x] `pnpm db:reset` aplica migraciones sin error
+- [x] Un JWT de tenant A no lee nada de tenant B en las **3 tablas con RLS**
       (`tenant_branding`, `tenant_features`, `tenant_content`). `tenants` es la tabla de
       identidad y **no** lleva RLS de tenant, asi que queda fuera de esta comprobacion
-- [ ] `core` tiene tests y corre sin browser
-- [ ] **Revision humana antes de seguir**
+- [x] `core` tiene tests y corre sin browser
+- [x] **Revision humana antes de seguir** (checkpoint cerrado en `0b6d5e6`)
 
 ---
 

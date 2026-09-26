@@ -15,7 +15,7 @@ alcance L y hay que dividirlas al empezar.
 
 ## Current Phase
 
-Phase 3
+Phase 4 (BUILD)
 
 ## Phases
 
@@ -61,22 +61,34 @@ Phase 3
 - [ ] TDD en las 14 tareas marcadas `[TDD]`
 - [ ] Revision de seguridad en las 9 tareas marcadas `[SEG]`
 - [ ] Dividir T13 antes de empezarla (alcance L)
-- [ ] **T0 completa**: monorepo, tooling, 3 packages, app Next 16, 12 tests
+- [x] **T0 completa**: monorepo, tooling, 3 packages, app Next 16, 12 tests
 - [x] **T1 completa y VERIFICADA contra Postgres real**: migracion 001 aplicada, seed
       aplicada, 12 tests de RLS en verde, `pnpm verify` al completo
 - [x] config-schema alineado con la tabla real: 7 feature_keys, branding de 8 columnas,
       tramos con `label`
+- [x] **T2 completa**: tipos de dominio en `core` reescritos contra la spec (los de T0
+      se inventaban `accentColor`, `percent` y 5 features de 7), `validateCancellationPolicy`
+      puro, guard de limites de capas con control negativo, `PriceQuote`/`PricingInput`
+      tal cual la seccion 10
 - **Status:** in_progress
 
-**Tarea actual: T2** (tipos de dominio del nucleo). **Checkpoint 0 cerrado**: el
+**Tarea actual: T3** (harness de reservas). **Checkpoint 0 cerrado**: el
 aislamiento entre tenants esta probado de verdad, no con mocks.
 
 **Decisiones de infraestructura tomadas en T1** (ver `Decisions Made`): PostgreSQL
 nativo 17 en local en vez de Docker, `pnpm db:reset` propio, shim de `auth` recreando
 lo que monta Supabase.
 
-**Pendiente de decidir con el usuario, no bloquea:** PostgreSQL local escucha en `*`
-con clave `postgres`, o sea en todas las interfaces de red.
+**Pendiente, requiere accion del usuario:** `postgresql.conf` ya dice
+`listen_addresses = 'localhost'`, pero el servicio sigue sin reiniciar, asi que el
+servidor ACTIVO continua en `*` con clave `postgres`. El agente no tiene elevacion:
+hay que ejecutar `Restart-Service postgresql-x64-17` en PowerShell como Administrador
+y luego comprobar `show listen_addresses`.
+
+**Pendiente de decidir con el usuario, no bloquea:** si un reembolso parcial se
+representa anadiendo un `partially_refunded` a `PaymentStatus`. La spec enumera 3
+estados, pero el tramo de 12h devuelve el 50% y existen `amount_refunded_cents` y
+`refund_percent_applied`. Decidir antes de T14b, no en T2.
 
 ### Phase 5: VERIFY
 

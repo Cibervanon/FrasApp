@@ -412,3 +412,96 @@ leyendo y no ejecutando.
 ---
 
 *Actualizar durante la investigacion para no perder evidencia.*
+
+## Un guard de limites de capas se prohibe a si mismo (T2)
+
+`boundaries.test.ts` busca `Date.now()`, `Math.random()` e `import` de `react` en el
+codigo fuente de `packages/core/src`. En la primera version fallo con 4 errores, y
+ninguno era un error real:
+
+1. **`SRC_DIR` apuntaba un nivel de mas.** Con `resolve(dirname(...), "..")` desde un
+   test en `src/`, la ruta daba `packages/core` en vez de `packages/core/src`. Escaneo
+   `node_modules`, y el fallo era: `__probe.ts` no existe en
+   `packages/core/domain/types.ts`. Un guard que mira el sitio equivocado no protege
+   nada y ademas da falsos positivos.
+
+2. **El guard se escanea a si mismo.** Sus propios patrones son literales: la regex
+   que busca `Math\.random\(\)` CONTIENE `Math.random(`. Un guard que se incluye en su
+   propio conjunto de ficheros falla siempre, y la unica forma de que pase es no
+   escribir la regla. Se excluye a si mismo, documentando el coste: el guard no vigila
+   al guard.
+
+3. **Los COMENTARIOS disparan la regla.** `validation.ts` documenta "ni
+   `Math.random()`", y ese texto contiene la llamada. Sin quitar comentarios antes de
+   buscar, la unica forma de que el guard pase es callar la regla. La solucion es
+   `stripComments()`, con la limitacion documentada de que es un stripper tentativa y
+   parte una linea si un string lleva `//` sin `:` delante.
+
+4. **El comentario 3 no era solo teorico.** Al ejecutar el guard aparecio
+   `domain/validation.ts` en la lista de infracción. Si no se hubiera implementado el
+   stripper, la "solucion" habria sido quitar el comentario, que es justo lo que hace
+   que un guard empuje al silencio.
+
+Regla que sale de aqui: **un guard sin control negativo no esta probado.** Se plantaron
+en `src/` un `import react`, un `Date.now()` y un `Math.random()`, se confirmo que las
+TRES reglas saltan nombrando el fichero, y se borro la sonda. Es el mismo control
+negativo que se aplico a RLS en T1 (quitar el `GRANT USAGE` y ver caer 10 de 12 tests).
+
+## `PriceQuote` no es lo que yo pensaba (T2)
+
+La tarea T2 pide el tipo `PriceQuote`. Yo escribi `PriceQuery` (entrada) y
+`ResolvedPrice` (salida), leyendo el nombre y suponiendo. La spec, seccion 10, define
+el contrato REAL:
+
+```ts
+export type PriceQuote = {
+  readonly totalCents: number;
+  readonly ruleId: string | null;
+  readonly ruleName: string | null;
+  readonly breakdown: readonly PriceLine[];
+};
+```
+
+Diferencias que importan: `totalCents` y no `priceCents`; `ruleId` y `ruleName`, no un
+`appliedRuleId` a secas; y `breakdown` es una lista de lineas, porque es lo que se
+guarda en `bookings.price_breakdown` para poder explicar un importe seis meses despues
+sin volver a ejecutar el motor. Ademas la entrada se llama `PricingInput` y recibe
+`court: Pick<Court, "id" | "courtType" | "basePriceCents">`, no campos sueltos.
+
+La spec USA `LocalDateTime` y `PriceLine` sin declararlas en ninguna parte. Hay que
+definirlas en `core`; si no, el motor de T7 no compila.
+
+Detalle que parece un descuido y NO lo es: `PriceQuote.totalCents` frente a
+`Booking.priceCents`. Son dos capas. `PriceQuote` es el contrato del MOTOR (seccion 10) y
+`Booking.priceCents` es el snapshot de la COLUMNA `bookings.price_cents` (seccion 4.4).
+Al mapear la cita a fila, el total pasa a ser el precio de la reserva. Queda escrito en
+el propio tipo para que el proximo no lo "arregle".
+
+## Un test de rechazo que no mira el motivo no prueba el motivo (T2)
+
+Dos tests de T2 que parecian cubrir algo y no cubrian nada:
+
+- `types.test.ts` de T0: `expect(tier.percent).toBeLessThanOrEqual(100)` sobre un
+  literal que el propio test habia escrito como `100`. Pasaria igual con un validador
+  que devolviese siempre `true`.
+- `schema.test.ts`: `expect(result.success).toBe(false)` para un `primary_color`
+  invalido. Pasaria si el esquema rechazara la fila entera por el nombre del club o
+  porque rechaza TODO. Ahora se mira `issue.path` y se exige que senale
+  `branding.primary_color` Y NADA MAS.
+
+Regla: un `safeParse` negativo que no comprueba el `path` del error no sabe que campo
+esta probando. Y un `expect(x).toBe(true)` sobre un valor que escribiste tu dos lineas
+antes no es un test.
+
+## Escribir el test DESPUES de escribir los tipos (T2)
+
+El primer `types.test.ts` que escribi en T2 usaba `surface: "acrylic"`, `isCovered`,
+`startAt`, `endAt`, `totalCents`, `logoUrl` y `TenantBranding`. Ninguno existe: el tipo
+real es `CourtSurface` con `cesped | lomo | hormigon`, `indoor`, `startsAt`, `endsAt`,
+`priceCents`, `logoPath` y se llama `Branding`. Lo escribi de memoria en vez de
+releer el fichero que acababa de crear, que estaba a dos lineas de distancia.
+
+El typecheck lo habria parado, pero pararlo tarde es lo mismo que no parar. Para
+dominios, escribir el tipo y DESPUES el test, leyendo el tipo, no de memoria.
+
+---

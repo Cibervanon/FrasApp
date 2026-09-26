@@ -348,3 +348,64 @@ repetido**. regla: no escribir globs con `*` seguido de `/` dentro de comentario
 ---
 
 *Actualizar tras cada fase, validacion o error.*
+
+## T1 cerrada y Checkpoint 0 (commit `0b6d5e6`)
+
+- PostgreSQL nativo 17.11 en vez de Docker/WSL. El usuario rechazo instalar Linux: en T1
+  ofreci Docker Desktop + WSL2 como si fuera un paso mas, y son 2-3 GB, un reinicio y dos
+  elevaciones de privilegios.
+- `pnpm db:reset` propio: shim de `auth`, migraciones y seed, sin CLI global.
+- RLS verificado de verdad: tenant A lee 1 fila propia, 0 del tenant B, y el INSERT de B
+  falla por la politica. Control negativo: quitar el `GRANT USAGE` tumbó 10 de 12 tests.
+- 12 tests de integracion contra Postgres real. `pnpm verify` completo en verde.
+- Commits: `91b4153`, `cf88982`, `cc23b96`, `67cbc13`, `0b6d5e6`.
+
+## T2: tipos del dominio en `core` (este commit)
+
+- `packages/core/src/domain/types.ts` reescrito contra la spec. Los de T0 se inventaban
+  `accentColor`, `percent` y 5 feature keys donde la spec define 7. `config-schema` ya
+  tenia las 7, asi que los dos paquetes se contradecian.
+- Anadido `validateCancellationPolicy` (puro, sin Zod, devuelve `Result` en vez de
+  lanzar) y `DEFAULT_REFUND_TIERS` con la escalera 24h/100, 12h/50, 0h/0 de la spec.
+- Anadido `boundaries.test.ts`: el guard de limites de capas, CON control negativo
+  verificado (planta un `import react` y un `Date.now()` en `src/` y comprueba que las
+  reglas saltan). Tambien comprueba que `core` y `config-schema` declaran las mismas
+  feature keys, que era exactamente la contradiccion de T0.
+- `PriceQuote` y `PricingInput` tomados de la seccion 10 de la spec, no inventados.
+  Definidos tambien `PriceLine` y `LocalDateTime`, que la spec usa sin declarar.
+- Endurecido el test de `primary_color` de `config-schema`: antes solo comprobaba
+  `success === false`, que pasa igual si el esquema rechaza la fila entera.
+- 40 tests en `core`, 16 en `config-schema`, 12 de integracion. `pnpm verify` en verde.
+- Lecciones en `findings.md`: los 4 fallos del guard (todos mios, ninguno del codigo),
+  el `PriceQuote` que no era lo que yo pensaba, y dos tests de rechazo que no probaban
+  su motivo.
+
+## Pendiente de accion del usuario
+
+`postgresql.conf` ya dice `listen_addresses = 'localhost'` (copia del original en
+`C:\Users\W10\AppData\Local\Temp\opencode\postgresql.conf.bak`), pero el servicio no se
+ha reiniciado, asi que el servidor sigue escuchando en `*` con clave `postgres`. El
+agente no puede elevarse: hace falta `Restart-Service postgresql-x64-17` en PowerShell
+como Administrador, y luego `show listen_addresses` para confirmar.
+
+## Pendiente de decision
+
+`PaymentStatus` tiene 3 estados segun la spec, pero `amount_refunded_cents` y
+`refund_percent_applied` solo tienen sentido con devoluciones parciales y el tramo de 12h
+devuelve el 50%. No se ha inventado un `partially_refunded`: se decide antes de T14b.
+
+---
+
+## 5-Question Reboot Check
+
+| Question | Answer |
+|----------|--------|
+| Where am I? | Phase 4 BUILD, **T2 cerrada**, siguiente T3 (harness de reservas) |
+| Where am I going? | T3 harness de integracion, T4 migracion de `courts` + `court_blocks` con RLS, y de ahi en adelante hasta el MVP |
+| What's the goal? | Plantilla PWA `padel-template`: reservas, precio dinamico, pago con Stripe Connect, partidos abiertos |
+| What have I learned? | Un guard de limites de capas se prohibe a si mismo y hay que probarlo con un control negativo. Un test de rechazo que no mira el `path` del error no sabe que campo prueba. Y los tipos hay que releerlos, no escribirlos de memoria |
+| What have I done? | Bootstrap, spec, plan (28 tareas), T0, T1 con RLS verificada contra Postgres real, y T2 con el dominio de `core` reescrito contra la spec. Commits: `5ec7764`, `2a90d30`, `7a85293`, `dfa40b6`, `91b4153`, `cf88982`, `cc23b96`, `67cbc13`, `0b6d5e6`, y este |
+
+---
+
+*Actualizar tras cada fase, validacion o error.*

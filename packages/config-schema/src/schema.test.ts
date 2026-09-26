@@ -100,17 +100,47 @@ describe("config-schema: contrato de tenant", () => {
     }
   });
 
-  it("rechaza un color que no es hex de 6 digitos", () => {
+  /**
+   * Antes esto era `expect(result.success).toBe(false)`, que pasa igual si el esquema
+   * rechaza el color por el nombre del club, por el slug o porque lo rechaza TODO.
+   * Un test de rechazo que no mira el motivo no sabe que color esta probando.
+   *
+   * Por eso se mira `issue.path`: tiene que señalar el campo del color, y solo ese.
+   */
+  function colorError(primaryColor: unknown): string[] {
     const result = tenantConfigSchema.safeParse({
       id: "3f9a1c62-0b7d-4c8e-9a11-5d2e7b4c1a90",
       name: "Club Padel Norte",
       slug: "club-norte",
-      branding: { ...validBranding, primary_color: "rojo" },
+      branding: { ...validBranding, primary_color: primaryColor },
       features: [],
       content: {},
     });
+    if (result.success) return [];
+    return result.error.issues.map((issue) => issue.path.join("."));
+  }
 
-    expect(result.success).toBe(false);
+  it("rechaza un color que no es hex de 6 digitos, y solo por el color", () => {
+    const paths = colorError("rojo");
+    expect(paths.length).toBeGreaterThan(0);
+    // `branding.primary_color` y nada mas: si tambien se quejara del nombre, este
+    // test estaria pasando por el motivo equivocado.
+    expect(paths.every((path) => path === "branding.primary_color")).toBe(true);
+  });
+
+  it("rechaza las formas de color que un gestor teclea sin querer", () => {
+    // Cada uno de estos llega de verdad: alguien pega el color de un diseno, o lo
+    // copia de una herramienta que da `#fff` en vez de `#ffffff`.
+    for (const bad of ["#fff", "1a4d8f", "#1a4d8", "#1a4d8ff", "rgb(26,77,143)", "#gggggg", ""]) {
+      expect(colorError(bad), `deberia rechazar ${JSON.stringify(bad)}`).not.toEqual([]);
+    }
+  });
+
+  it("acepta un hex de 6 digitos en mayusculas y minusculas", () => {
+    // A veces el color viene de un Figma en mayusculas. Rechazarlo seria testar el
+    // capricho del regex, no la regla.
+    expect(colorError("#1A4D8F")).toEqual([]);
+    expect(colorError("#1a4d8f")).toEqual([]);
   });
 
   it("rechaza min_player_age fuera del rango 14-21", () => {
