@@ -159,6 +159,68 @@ servidor acepta `is_minor = false` del cuerpo de la peticion, el `check` ve `fal
 exige tutor, y el menor se salta el requisito. Solo recalcular en servidor lo cierra; el
 `check` es segunda capa.
 
+## Entorno de toolchain: las ultimas versiones fallan (T0, 2026-09-26)
+
+Elegir `latest` en todas partes fallo tres veces seguidas antes de tener un build verde.
+
+- **TypeScript 7.0.2 compila pero no se puede lintear.** `typescript-eslint` lanza
+  `typescript-eslint does not support TS 7.0` y se niega a arrancar. El compilador va bien;
+  el parser del linter no. Bajado a **6.0.3**, la ultima 6.x estable.
+- **ESLint 10.11.0 falla aunque los peerDeps digan que funciona.**
+  `TypeError: scopeManager.addGlobals is not a function`: ESLint 10 llama a un metodo que
+  el scope-manager de typescript-eslint 8.70.1 no tiene. Los peerDeps de typescript-eslint
+  declaran `^10.0.0`, o sea, **los peerDeps mienten o el bug es conocido y sin fix**.
+  Bajado a **9.39.5**.
+- **Next 16 elimino el comando `next lint`.** `next --help` no lo lista y
+  `next lint --max-warnings 0` responde `unknown option`. El lint se ejecuta con el CLI de
+  ESLint 10/9 directamente y `eslint.config.mjs` en flat config.
+
+**Decision: fijar la version que soporta toda la cadena, no la ultima de cada paquete.**
+Es una plantilla que se vende a clientes y que nosotros mantenemos. Un `latest` que
+compila pero no se puede lintear no es estar al dia, es deuda con pasos extra.
+
+## Tailwind 4 y Turbopack: los `@import` de CSS se resuelven relativos al fichero (T0)
+
+`packages/ui/src/styles.css` hacia `@import "tailwindcss"` y el build de Next 16 (Turbopack)
+fallaba:
+
+```
+FileSystemPath("apps/padel-template").join("../../../../node_modules/tailwindcss/index.css")
+leaves the filesystem root
+```
+
+Turbopack resuelve el `@import` **relativo al fichero que lo contiene**, y Tailwind no es
+resoluble desde `packages/ui` (esta instalado en la app). Se podria "arreglar" anadiendo
+tailwindcss a las deps de `ui`, pero eso es el parche: la conclusion correcta es que
+**Tailwind es tooling de build de la app, no del paquete de UI**, y que un paquete de
+componentes no debe imponer su cadena de CSS a quien lo consume. `ui/styles.css` se queda
+solo con los tokens de marca; la app importa Tailwind en su `globals.css`.
+
+## Zod 4: la invariante de la politica de cancelacion (T0)
+
+Bug mio, encontrado por el test, no por la revision. Escribi la validacion al reves:
+rechazaba que un tramo devolviera *menos* que el de mas antelacion. Pero una politica
+valida es exactamente eso: **menos aviso, menos devolucion** (24h->100%, 12h->50%,
+0h->0%). Tal como estaba, **ningun club podia configurar su politica**, porque el caso
+normal se rechazaba como incoherente.
+
+Lo incoherente de verdad es lo contrario: que con menos aviso se devuelva *mas*.
+
+Recordatorio: un validador que rechaza el caso normal no se nota hasta que un usuario
+real intenta configurar algo. Un test que exercise el caso normal lo caza en el acto.
+
+## Trampas de esta herramienta al escribir codigo (T0)
+
+- **`*/` dentro de un comentario de bloque cierra el comentario.** Escribir el glob
+  `**/*.ts` en un `/* ... */` de `eslint.config.mjs` hizo que el fichero no parsease, con
+  un `SyntaxError: Unexpected token '*'` que no senala el fichero. Cuesta 20 minutos
+  encontrarlo si no se sospecha del comentario.
+- **`as` sobre un tipo inadequate no falla, miente.** `brandVars` hacia
+  `{...} as CSSProperties` para devolver variables CSS personalizadas que `CSSProperties`
+  no tipa. El typecheck pasaba y el tipo era falso. Resuelto con un tipo real.
+- **Un `tsconfig` que excluye los tests hace que `typecheck` no los mire.** Hay un segundo
+  config (`tsconfig.test.json`) solo para typecheck, que si incluye `*.test.ts`.
+
 ---
 
 *Actualizar durante la investigacion para no perder evidencia.*

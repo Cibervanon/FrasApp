@@ -1,0 +1,47 @@
+# Dependencias
+node_modules/
+.pnpm-store/
+
+# Builds
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Turbo
+.turbo/
+
+# Tests
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# Entorno. Los secretos viven SOLO en .env.local, nunca en el repo.
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Supabase
+supabase/.temp/
+supabase/.branches/
+supabase/.env
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Varios
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.vercel

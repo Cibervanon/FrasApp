@@ -21,13 +21,14 @@ Leyenda: `[TDD]` = test-first obligatorio · `[SEG]` = requiere revision de segu
 
 **Descripcion:** Turborepo con `packages/ui`, `packages/core`, `packages/config-schema`,
 `apps/padel-template`. TypeScript estricto, Tailwind, Vitest, Playwright. `.env.example`
-versionado con los 8 nombres de variable de la seccion 9, sin valores reales.
+versionado con los **9** nombres de variable de la seccion 9, sin valores reales.
 
 **Criterios de aceptacion:**
 - [ ] `pnpm install`, `pnpm build`, `pnpm typecheck` y `pnpm lint` pasan en limpio
 - [ ] `strict: true` y `noUncheckedIndexedAccess: true` activos
-- [ ] `.env.example` existe con las 8 variables. `.env.local` en `.gitignore`
+- [ ] `.env.example` existe con las **9** variables. `.env.local` en `.gitignore`
 - [ ] Los 3 packages tienen `package.json` con `exports` correctos y se importan entre si
+- [ ] Un test smoke en cada package, para que `pnpm test` tenga algo que correr desde T0
 
 **Verificacion:** `pnpm build` · `pnpm typecheck` · test de limites de capas (vacio en esta
 tarea, se rellena en T6)

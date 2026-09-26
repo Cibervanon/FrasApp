@@ -60,10 +60,11 @@ Phase 3
 - [ ] Implementar T0-T20, T14b, T14c, T18a-T18f en orden, un commit por tarea
 - [ ] TDD en las 14 tareas marcadas `[TDD]`
 - [ ] Revision de seguridad en las 9 tareas marcadas `[SEG]`
-- [ ] **Dividir T13 antes de empezarla** (alcance L)
+- [ ] Dividir T13 antes de empezarla (alcance L)
+- [x] **T0 completa**: monorepo, tooling, 3 packages, app Next 16, 12 tests
 - **Status:** in_progress
 
-**Tarea actual: T0** (monorepo Turborepo + tooling)
+**Tarea actual: T1** (migracion inicial de tenancy, `[TDD]` `[SEG]`)
 
 ### Phase 5: VERIFY
 

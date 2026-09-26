@@ -1,0 +1,23 @@
+/**
+ * Tokens de marca de la capa `ui`.
+ *
+ * Deliberadamente **no** importa Tailwind. Tailwind es una decision de build de
+ * la app, no de este paquete: si `ui` lo importara, obligaria a todos los
+ * consumidores (incluido un futuro cliente con otra cadena) a tener Tailwind
+ * resoluble desde aqui, y Turbopack resuelve los `@import` de CSS relativos a
+ * la ruta del fichero que los contiene.
+ *
+ * La app importa Tailwind en su propio `globals.css` y luego estos tokens.
+ */
+:root {
+  /* Respaldo: el tenant los sobreescribe en runtime desde `tenant_branding`.
+     Regla 1: ningun color de marca hardcodeado como valor de verdad. */
+  --brand-primary: #1a4d8f;
+  --brand-accent: #e8a33d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: light dark;
+  }
+}

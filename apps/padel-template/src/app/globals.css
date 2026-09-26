@@ -1,0 +1,8 @@
+/**
+ * Tailwind 4 se importa desde aqui, en la app, no desde `packages/ui`.
+ *
+ * El orden importa: primero Tailwind (que trae sus propias capas de base), luego
+ * los tokens de marca de `ui`, para que un tenant pueda sobreescribirlos.
+ */
+@import "tailwindcss";
+@import "@frasapp/ui/styles.css";

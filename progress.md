@@ -225,15 +225,61 @@ Tres huecos reales entre spec y plan, ninguno cosmetico:
 
 **Plan aprobado por el usuario 2026-09-26.** BUILD empieza por T0.
 
+## Session: 2026-09-26 (7) - T0 monorepo + tooling
+
+### Resultado
+
+T0 completa. `pnpm verify` (typecheck + lint + test + build) en verde, y `pnpm test:e2e`
+con Chromium en 375x667 tambien.
+
+### Versiones fijadas y por que
+
+Elegir "lo ultimo" fallo tres veces seguidas. Valor inicial y razon del cambio:
+
+| Paquete | Inicial | Final | Motivo |
+|---------|---------|-------|--------|
+| typescript | 7.0.2 | **6.0.3** | `typescript-eslint` **no soporta TS 7.0**. El compilador lo acepta; el linter no puede parsearlo |
+| eslint | 10.11.0 | **9.39.5** | `scopeManager.addGlobals is not a function`: ESLint 10 pide una API que typescript-eslint 8.70.1 no implementa. Sus peerDeps *declaran* soporte de ESLint 10, y aun asi revienta |
+| next | 16.3.6 | 16.3.6 | Se queda. Next 16 elimino `next lint`, se usa el CLI de ESLint con flat config |
+| tailwindcss | 4.3.3 | 4.3.3 | Se queda. v4 es CSS-first, sin `tailwind.config.js` |
+
+**Regla que sale de aqui:** en una plantilla que se vende y se mantiene, no se prueba con
+la ultima major de todo. Se usa la version que soporta *toda* la cadena. Un `latest` que
+compila pero no se puede lintear es una decision, no un_atajo.
+
+### Bugs encontrados y corregidos
+
+1. **Invariante de cancelacion invertida** (el mas grave). En `cancellationPolicySchema`
+   rechazaba que un tramo devolviera *menos* que el anterior. Pero eso es exactamente lo
+   normal: 24h->100%, 12h->50%, 0h->0%. Tal como estaba, **ningun club podria configurar
+   su politica de cancelacion**. Lo detecto el test, no la revision. Invertido: ahora se
+   rechaza que con menos aviso se devuelva mas.
+2. **`as CSSProperties` mentia.** `brandVars` hacia cast para devolver variables CSS
+   personalizadas que `CSSProperties` no tipa. El typecheck pasaba y el tipo era falso.
+   Resuelto con un tipo real `BrandVars`, no con el cast.
+3. **`*/` dentro de un comentario de bloque.** Escribi `**/*.ts` en el comentario de
+   `eslint.config.mjs`. Ese `*/` **cerraba el comentario antes de tiempo** y el fichero no
+   parseaba. Error Mio, de los que se pierden 20 minutos.
+4. **Tailwind no puede importarse desde `packages/ui`.** Turbopack resuelve los `@import` de
+   CSS relativos al fichero que los contiene, y Tailwind no es resoluble desde `ui`. La
+   solucion es tambien la correcta: Tailwind es tooling de build de la *app*, no del
+   paquete de UI. `ui/styles.css` se queda solo con los tokens de marca.
+5. **Falta `@types/react` en `packages/ui`** (solo estaba en la app).
+
+### Corregido de paso
+
+La spec lista **9** variables de entorno, no 8. El "8" venia de un resumen mio anterior y
+se habia metido en los criterios de T0. Corregido en `tasks/todo.md`.
+
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 4 BUILD, empezando **T0** (monorepo Turborepo + tooling) |
-| Where am I going? | T0 -> T20 + T14b,T14c,T18a-T18f, un commit por tarea, 7 checkpoints |
+| Where am I? | Phase 4 BUILD, **T0 completa**, empezando **T1** (migracion inicial de tenancy) |
+| Where am I going? | T1 -> T20 + T14b,T14c,T18a-T18f, un commit por tarea, 7 checkpoints |
 | What's the goal? | Plantilla PWA `padel-template`: reservas, precio dinamico, pago con Stripe Connect, partidos abiertos |
-| What have I learned? | Ver findings.md. Trampa de IMMUTABLE en EXCLUDE, trigger para invitaciones, y los tres patrones de fallo spec->plan: funcion pura sin consumidor, criterio de seguridad en la fase equivocada, alcance L sin dividir |
-| What have I done? | Bootstrap, spec (13 decisiones), plan de 28 tareas con 7 checkpoints, 2 commits (`5ec7764` spec, `2a90d30` plan). **Ningun commit de codigo todavia** |
+| What have I learned? | Ver findings.md. Los tres patrones spec->plan, la trampa de IMMUTABLE en EXCLUDE, y que "usar la ultima version" falla: TS 7 y ESLint 10 compilan pero no se pueden lintear |
+| What have I done? | Bootstrap, spec (13 decisiones), plan (28 tareas), **T0 con 12 tests + E2E**. Commits: `5ec7764`, `2a90d30`, `7a85293`, y este |
 
 ---
 
