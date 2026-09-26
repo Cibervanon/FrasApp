@@ -32,8 +32,8 @@ enable_confirmations = false
 enabled = true
 port = 54323
 
-[inbucket]
-# Captura de emails: los correos de invitacion y reserva se ven aqui sin
-# entregar nada a Resend.
-enabled = true
-port = 54324
+# Sin seccion de SMTP local a proposito. La 2.118.0 avisa de que `[inbucket]` esta
+# obsoleta y pide `[local_smtp]`; en vez de adivinar los campos de la nueva seccion
+# se omite, porque el MVP no necesita SMTP para nada y anadirla aqui es documentacion
+# que puede quedarse desfasada. Cuando T16 mande correos en local, se anade entonces
+# con los campos que pida la CLI de esa version.
