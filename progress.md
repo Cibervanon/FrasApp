@@ -82,11 +82,41 @@ Registro cronologico de acciones, archivos, validaciones y errores.
   - `findings.md` (decisiones OQ-2, OQ-6, OQ-8, OQ-10, refs Documento 2 y VERI\*FACTU)
   - `progress.md` (este archivo)
 
-### Phase 3: PLAN
+## Session: 2026-09-26 (5) — Commit de la spec + /plan
 
-- **Status:** in_progress. Arranca tras el commit de la spec.
-- Orden previsto: `tenancy` -> `catalog` -> `pricing` -> `booking` -> `payments` ->
-  `openmatch` -> `invites` -> `news` -> `gdpr`.
+- **Status:** complete
+- Actions taken:
+  - **Commit `5ec7764`**: spec + memoria de plan + `agents.md`. Primer commit del repo
+    (root commit, rama `master`).
+  - Identidad de git configurada **solo en este repo** (no global), con el nombre del
+    owner del remoto: `Cibervanon <Cibervanon@users.noreply.github.com>`. Preguntado al
+    usuario antes de configurar; mi regla es no tocar git config sin permiso.
+  - `agents.md` traido por el usuario con el placeholder `[NOMBRE DE TU NEGOCIO]` sin
+    sustituir. Corregido a `FrasApps` con su confirmacion.
+  - **`/plan` ejecutado** con la skill `planning-and-task-breakdown`:
+    - `tasks/plan.md` (238 lineas): overview, decisiones de arquitectura con su
+      justificacion, 6 fases, grafo de dependencias, riesgos con mitigacion, paralelizable
+      vs secuencial.
+    - `tasks/todo.md` (524 lineas): **21 tareas T0-T20**, cada una con descripcion,
+      criterios de aceptacion, verificacion, dependencias y alcance. **12 marcadas
+      `[TDD]`**, **7 `[SEG]`**. **6 checkpoints** con revision humana.
+  - Verificado: UTF-8 valido, 0 CJK en ambos ficheros, 21 tareas detectadas,
+    2 tareas L marcadas para dividir, referencias de fase coherentes.
+  - Corregidos 3 errores de escritura al redactar (`casesinteresting`, `con???exhaustividad`,
+    `capas???`).
+- Files created/modified:
+  - `docs/specs/padel-template-mvp.md` (actualizada, 1218 lineas)
+  - `tasks/plan.md` (nuevo)
+  - `tasks/todo.md` (nuevo)
+  - `agents.md` (placeholder sustituido)
+  - `task_plan.md`, `findings.md`, `progress.md`
+  - Commit: `5ec7764`
+
+### Phase 4: BUILD
+
+- **Status:** pending. Arranca con T0 tras la aprobacion del plan.
+- **Nota:** T13 (Stripe Connect) y T18 (pantallas) estan marcadas alcance L. Hay que
+  dividirlas al empezar, no dejarlas asi.
 
 ## Session: 2026-09-26 (4) — Cierre de OQ-11..OQ-13 y commit de la spec
 

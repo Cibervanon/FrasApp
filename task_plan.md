@@ -9,9 +9,9 @@ producto: venta de plantilla de código y SaaS de marca blanca por instancia ais
 
 ## Next Step
 
-Spec commiteada. Arrancar `/plan`: descomponer en tareas verificables con el orden
-`tenancy` -> `catalog` -> `pricing` -> `booking` -> `payments` -> `openmatch` -> `invites`
--> `news` -> `gdpr`.
+Plan y backlog escritos (`tasks/plan.md`, `tasks/todo.md`). Pedir al usuario la
+aprobacion del plan antes de arrancar `/build` por T0. Ojo: T13 y T18 estan marcadas como
+alcance L y hay que dividirlas al empezar.
 
 ## Current Phase
 
@@ -44,17 +44,22 @@ Phase 3
 
 ### Phase 3: PLAN -> tareas verificables
 
-- [ ] Descomponer la spec en tareas pequenas
-- [ ] Criterios de aceptacion explicitos por tarea
-- [ ] Marcar cuales exigen TDD (tenant_id, RLS, precios, reservas)
-- [ ] Migraciones en orden de dependencia
-- [ ] **Status:** in_progress
+- [x] Descompuesta la spec en **21 tareas** (T0-T20) en `tasks/todo.md`
+- [x] Criterios de aceptacion explicitos por tarea
+- [x] Marcadas **12 tareas `[TDD]`** y **7 `[SEG]`** (revision de seguridad)
+- [x] Migraciones en orden de dependencia, con sus tareas
+- [x] **6 checkpoints** con revision humana entre fases
+- [x] `tasks/plan.md` con decisiones, riesgos y paralelizacion
+- [x] Alcances L marcados para dividir (T13 Stripe Connect, T18 pantallas)
+- [ ] **Usuario aprueba el plan**
+- **Status:** in_progress
 
 ### Phase 4: BUILD
 
-- [ ] Implementar tarea a tarea
-- [ ] TDD en todo lo que toque tenant_id / RLS / precios / reservas
-- [ ] Un commit por tarea cerrada
+- [ ] Implementar T0-T20 en orden, un commit por tarea
+- [ ] TDD en las 12 tareas marcadas `[TDD]`
+- [ ] Revision de seguridad en las 7 tareas `[SEG]`
+- [ ] **Dividir T13 y T18 antes de empezarlas** (alcance L)
 - **Status:** pending
 
 ### Phase 5: VERIFY

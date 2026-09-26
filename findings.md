@@ -61,6 +61,17 @@ Ciclo obligatorio: DEFINE (spec) -> PLAN -> BUILD -> VERIFY -> REVIEW -> SHIP.
   un dueno de club no pueda hacer por si mismo (SMTP, SPF/DKIM, dominio propio) se
   resuelve en nuestro lado con una solucion compartida. Repetido en el Documento 2 y en
   OQ-12.
+- **Identidad de git del repo:** `Cibervanon <Cibervanon@users.noreply.github.com>`,
+  configurada solo en el repo (no global). Rama por defecto: `master`.
+
+## Estructura del plan (2026-09-26)
+
+- `tasks/plan.md` (238 lineas): decisiones, 6 fases, riesgos, paralelizable.
+- `tasks/todo.md` (524 lineas): 21 tareas T0-T20, 12 `[TDD]`, 7 `[SEG]`, 6 checkpoints.
+- **T13 (Stripe Connect) y T18 (pantallas) marcadas alcance L: hay que dividirlas antes de
+  empezarlas.**
+- El test que protege la restriccion `EXCLUDE` es la red de seguridad principal del
+  proyecto. Si ese test se puede saltarse, el sistema permite doble reserva.
 
 ## Hallazgos tecnicos de la spec (padel)
 
