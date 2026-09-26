@@ -11,6 +11,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.db.test.ts"],
+    // Carga `.env.local` antes de los tests: Vitest no lo hace solo, y las
+    // credenciales de la base no pueden llevar prefijo VITE_ porque acabarian
+    // en el bundle del navegador.
+    setupFiles: ["src/test/setup-env.ts"],
     // El RLS necesita ventana propia: cada test abre una sesion y hace
     // `set local role authenticated`, y la paralelidad las pisaria.
     fileParallelism: false,

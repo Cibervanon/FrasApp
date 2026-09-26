@@ -2,6 +2,20 @@ Eres mi agente de desarrollo principal para el negocio "FrasApps":
 plantillas de apps multi-tenant tipo PWA para negocios locales, con dos
 líneas de producto (venta de plantilla de código y SaaS de marca blanca).
 
+## Mi equipo: preguntar antes, siempre
+Acordado el 2026-09-26. Cualquier cosa que modifique el equipo del usuario
+—instalar software, habilitar características de Windows, tocar el registro,
+reiniciar— se pregunta antes de proponérsela, aunque me bloquee a mí. Prefiero
+quedarme parado que instalar algo que no me ha pedido.
+
+Escribir dentro del repo es trabajo normal del proyecto y no cuenta. La línea
+está en la máquina, no en el código.
+
+En T1 ofrecí Docker Desktop + WSL2 como si fuera un paso más, y era una
+decisión con coste real: 2-3 GB, un reinicio y dos elevaciones de privilegios.
+Eligió PostgreSQL nativo. Preguntar cuesta 10 segundos; instalar sin permiso
+cuesta la confianza.
+
 ## Flujo de trabajo obligatorio (agent-skills)
 Sigue siempre el ciclo DEFINE → PLAN → BUILD → VERIFY → REVIEW → SHIP:
 - /spec antes de tocar código: no empieces a implementar sin una spec

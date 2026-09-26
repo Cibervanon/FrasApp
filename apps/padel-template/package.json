@@ -13,8 +13,7 @@
     "test:watch": "vitest",
     "test:db": "vitest run --config vitest.db.config.ts",
     "test:e2e": "playwright test",
-    "db:reset": "supabase db reset",
-    "db:start": "supabase start"
+    "db:reset": "node scripts/db-reset.mjs"
   },
   "dependencies": {
     "@frasapp/config-schema": "workspace:*",
@@ -32,10 +31,10 @@
     "@types/pg": "8.15.6",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "dotenv": "17.2.4",
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.6",
     "pg": "8.16.3",
-    "supabase": "2.118.0",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
     "vitest": "5.0.2"

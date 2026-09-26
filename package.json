@@ -15,7 +15,6 @@
     "test:db": "turbo run test:db",
     "test:e2e": "turbo run test:e2e",
     "db:reset": "pnpm --filter @frasapp/padel-template db:reset",
-    "db:start": "pnpm --filter @frasapp/padel-template db:start",
     "verify": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:db && pnpm run build"
   },
   "devDependencies": {

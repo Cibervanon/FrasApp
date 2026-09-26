@@ -12,19 +12,36 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * Dos tenants, `A` y `B`, sembrados con filas propias. La prueba es siempre la
  * misma y en las dos direcciones: A no ve a B, y B no ve a A.
  *
- * Connexion: `supabase start` (Supabase local, Docker). Puerto 54322.
+ * Connexion: PostgreSQL nativo local (puerto 5432, base `padel_template`).
+ * Se crea y se puebla con `pnpm db:reset`. Configuracion por `.env.local`.
  */
 
 const TENANT_A = "00000000-0000-4000-8000-00000000000a";
 const TENANT_B = "00000000-0000-4000-8000-00000000000b";
 
-const CONNECTION = {
-  host: process.env["SUPABASE_DB_HOST"] ?? "localhost",
-  port: Number(process.env["SUPABASE_DB_PORT"] ?? 54322),
-  user: process.env["SUPABASE_DB_USER"] ?? "postgres",
-  password: process.env["SUPABASE_DB_PASSWORD"] ?? "postgres",
-  database: process.env["SUPABASE_DB_NAME"] ?? "postgres",
-};
+/**
+ * La contraseÃ±a NO tiene valor por defecto, a proposito. Con un default tipo
+ * "postgres", si la variable falta el test se connectaria a otra base y pasaria
+ * dando una falsa confianza, o fallaria con un error de autenticacion que no
+ * dice nada del problema real. Fallar al arrancar es el comportamiento correcto.
+ */
+function connection() {
+  const password = process.env["PGPASSWORD"];
+  if (!password) {
+    throw new Error(
+      "Falta PGPASSWORD. Copia .env.example a .env.local y rellena la " +
+        "contraseÃ±a que pusiste al instalar PostgreSQL. Se ejecuta con " +
+        "`pnpm db:reset` antes de este test.",
+    );
+  }
+  return {
+    host: process.env["PGHOST"] ?? "localhost",
+    port: Number(process.env["PGPORT"] ?? 5432),
+    user: process.env["PGUSER"] ?? "postgres",
+    password,
+    database: process.env["PGDATABASE"] ?? "padel_template",
+  };
+}
 
 /**
  * Sesion con la identidad de un tenant concreto.
@@ -34,7 +51,7 @@ const CONNECTION = {
  * hace que este test signifique algo.
  */
 async function asTenant(tenantId: string): Promise<Client> {
-  const client = new Client(CONNECTION);
+  const client = new Client(connection());
   await client.connect();
   await client.query("begin");
   await client.query("set local role authenticated");
@@ -48,7 +65,7 @@ async function asTenant(tenantId: string): Promise<Client> {
 let admin: Client;
 
 beforeAll(async () => {
-  admin = new Client(CONNECTION);
+  admin = new Client(connection());
   await admin.connect();
 
   await admin.query("delete from public.tenant_branding");
@@ -152,7 +169,7 @@ describe("RLS: aislamiento entre tenants", () => {
   it("un JWT sin tenant_id no ve nada de ninguna tabla", async () => {
     // El caso del socio sin sesion de club, o con un JWT manipulado al que le
     // quitaron el claim. Cero filas, no error: la politica simplemente no casa.
-    const anon = new Client(CONNECTION);
+    const anon = new Client(connection());
     await anon.connect();
     await anon.query("begin");
     await anon.query("set local role authenticated");
