@@ -169,6 +169,13 @@ Registro cronologico de acciones, archivos, validaciones y errores.
 | Repo tiene codigo previo | `git ls-remote` refs | 0 refs | 0 refs | pass (repo vacio) |
 | Consistencia de refs OQ | spec | OQ-1..OQ-15 sin huecos | OQ-1..OQ-15 | pass |
 | Bloqueantes restantes | spec | 0 | 0 (15.1 no bloquea) | pass |
+| Encoding tras revision del plan (v3) | 5 ficheros, UTF-8 estricto | 0 chars CJK/Hangul | 0 chars CJK/Hangul | pass |
+| Recuento de tareas tras revision | `tasks/todo.md` | 28 | 28 (T0-T20, T14b, T14c, T18a-T18f) | pass |
+| Marcadores TDD/SEG tras revision | `tasks/todo.md` | 14 TDD, 9 SEG | 14 TDD, 9 SEG | pass |
+| Continuidad de numeracion | `tasks/todo.md` | sin huecos | T0-T20 + T14b,T14c,T18a-T18f | pass |
+| Hueco reembolso | endpoint en spec vs tarea | existe tarea | T14b creada | pass |
+| Hueco menores | criterio vs checkpoint | aparece en CP3 y CP4 | aparece en CP3, CP4 y T14c | pass |
+| Hueco T18 | division real | 6 tareas | T18a-T18f | pass |
 
 ## Error Log
 
@@ -181,20 +188,52 @@ Registro cronologico de acciones, archivos, validaciones y errores.
 | 2026-09-26 | 6 chars CJK corruptos en la spec (lineas 339 y 862) | 1 | Reparados; el de la linea 862 no se resolvia con edit por codepage, se sustituyo por regex sobre los code points |
 | 2026-09-26 | Documento 4 ausente del disco | 1 | Busqueda en 4 carpetas del perfil. Spec marcada PROVISIONAL, pendiente del usuario |
 | 2026-09-26 | Documento 4 recibido con OQ-1..OQ-10 resueltas | 1 | Spec actualizada en 12 puntos. Verificado 0 CJK, 1155 lineas, refs OQ consistentes |
+| 2026-09-26 | `edit` de Checkpoint 4 no aplico: el fichero decia "inserta", no "insecta" | 1 | Releido el fichero y reintentado con el texto real |
+| 2026-09-26 | 4 chars Hangul (U+6DB3 U+AD6C U+5B58 U+6392) colados en `tasks/plan.md` al anadir la revision | 1 | Sustituidos por "crecio desde". El escaner CJK inicial no cubria el rango Hangul; ampliado a U+AC00-U+D7AF |
+| 2026-09-26 | "repartidor de email" en el Checkpoint 4 de `plan.md` | 1 | Corregido a "el email saliente". Era una errata del turno anterior, no de esta revision |
 
 **Nota sobre la corrupcion CJK:** aparece al escribir archivos con `write`/`edit` en este
 entorno. Se ha detectado con un script de verificacion de code points despues de cada
 escritura. Los acentos UTF-8 (U+00ED, U+00F3) si son correctos y no se tocan.
 
+## Session: 2026-09-26 (6) - Revision del plan y luz verde
+
+### Que pidio el usuario
+
+Tres huecos reales entre spec y plan, ninguno cosmetico:
+1. No habia tarea para cancelar una reserva **ya pagada** (ni `/cancel` ni `/refund`).
+   Los tramos de reembolso de T8 no tenian consumidor en produccion.
+2. El calculo de `is_minor` en servidor no aparecia en ningun checkpoint.
+3. T18 estaba marcada "dividir" pero no estaba dividida.
+
+### Que se hizo
+
+- **T14b** creada: cancelar reserva confirmada y reembolsar, con su propio **Checkpoint 3b**.
+  Cierra los 5 casos de la tabla de punta a punta contra Stripe, guarda el snapshot del
+  tramo, libera el slot, y no devuelve el doble si se cancela dos veces.
+- **T14c** creada: verificacion de menores en servidor, con el test manipulado explicito.
+  Es tarea propia porque un `check` de BD **no** cierra ese agujero.
+- **T18 dividida de verdad** en T18a-T18f, seis tareas con nombre y dependencias.
+- Checkpoint 3 y 4 actualizados con los criterios nombrados por el usuario.
+- `plan.md` documenta la revision y las tres reglas que salen de ella.
+
+### Commit
+
+`2a90d30` plan: 21 tareas T0-T20. La revision posterior va en un commit aparte.
+
+### Estado
+
+**Plan aprobado por el usuario 2026-09-26.** BUILD empieza por T0.
+
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 2 — spec cerrada, esperando visto bueno para /plan |
-| Where am I going? | /plan -> BUILD -> VERIFY -> REVIEW -> SHIP |
+| Where am I? | Phase 4 BUILD, empezando **T0** (monorepo Turborepo + tooling) |
+| Where am I going? | T0 -> T20 + T14b,T14c,T18a-T18f, un commit por tarea, 7 checkpoints |
 | What's the goal? | Plantilla PWA `padel-template`: reservas, precio dinamico, pago con Stripe Connect, partidos abiertos |
-| What have I learned? | Ver findings.md. Trampa de IMMUTABLE en EXCLUDE, trigger para invitaciones, fechas de VERI*FACTU en movimiento |
-| What have I done? | Bootstrap + spec completa con las 10 decisiones cerradas. **Ningun commit todavia** (sin codigo que commitear) |
+| What have I learned? | Ver findings.md. Trampa de IMMUTABLE en EXCLUDE, trigger para invitaciones, y los tres patrones de fallo spec->plan: funcion pura sin consumidor, criterio de seguridad en la fase equivocada, alcance L sin dividir |
+| What have I done? | Bootstrap, spec (13 decisiones), plan de 28 tareas con 7 checkpoints, 2 commits (`5ec7764` spec, `2a90d30` plan). **Ningun commit de codigo todavia** |
 
 ---
 

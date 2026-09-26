@@ -44,23 +44,26 @@ Phase 3
 
 ### Phase 3: PLAN -> tareas verificables
 
-- [x] Descompuesta la spec en **21 tareas** (T0-T20) en `tasks/todo.md`
+- [x] Descompuesta la spec en **28 tareas** (T0-T20 + T14b, T14c, T18a-T18f) en `tasks/todo.md`
 - [x] Criterios de aceptacion explicitos por tarea
-- [x] Marcadas **12 tareas `[TDD]`** y **7 `[SEG]`** (revision de seguridad)
+- [x] Marcadas **14 tareas `[TDD]`** y **9 `[SEG]`** (revision de seguridad)
 - [x] Migraciones en orden de dependencia, con sus tareas
-- [x] **6 checkpoints** con revision humana entre fases
+- [x] **7 checkpoints** con revision humana entre fases
 - [x] `tasks/plan.md` con decisiones, riesgos y paralelizacion
-- [x] Alcances L marcados para dividir (T13 Stripe Connect, T18 pantallas)
-- [ ] **Usuario aprueba el plan**
-- **Status:** in_progress
+- [x] T18 **dividida en 6 tareas con nombre** (T18a-T18f) tras revision del usuario
+- [x] T13 queda como alcance L: dividir al llegar a ella
+- [x] **Usuario aprueba el plan** 2026-09-26, con tres correcciones previas
+- **Status:** complete
 
 ### Phase 4: BUILD
 
-- [ ] Implementar T0-T20 en orden, un commit por tarea
-- [ ] TDD en las 12 tareas marcadas `[TDD]`
-- [ ] Revision de seguridad en las 7 tareas `[SEG]`
-- [ ] **Dividir T13 y T18 antes de empezarlas** (alcance L)
-- **Status:** pending
+- [ ] Implementar T0-T20, T14b, T14c, T18a-T18f en orden, un commit por tarea
+- [ ] TDD en las 14 tareas marcadas `[TDD]`
+- [ ] Revision de seguridad en las 9 tareas marcadas `[SEG]`
+- [ ] **Dividir T13 antes de empezarla** (alcance L)
+- **Status:** in_progress
+
+**Tarea actual: T0** (monorepo Turborepo + tooling)
 
 ### Phase 5: VERIFY
 

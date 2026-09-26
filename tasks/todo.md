@@ -359,16 +359,97 @@ enviado 3 veces
 
 **Depende de:** T8, T13 · **Alcance:** M
 
----
-
-### Checkpoint 3
+### Checkpoint 3: Reserva y pago
 - [ ] **Test que intenta solapar dos reservas recibe 409. Falla si se borra el `EXCLUDE`**
 - [ ] Dos holds concurrentes: exactamente uno gana
 - [ ] El webhook es idempotente
 - [ ] El importe va a la cuenta del club, no a la plataforma
 - [ ] El club paga exactamente el precio de la pista
+- [ ] **Un `is_minor = false` enviado desde el cliente con fecha de menor se recalcula en
+      servidor. Verificado con test, no de palabra** (T14c)
 - [ ] **Revision de seguridad obligatoria: RLS, webhook, IAM de Connect**
 - [ ] **Revision humana antes de seguir**
+
+---
+
+### [ ] T14b: Cancelar reserva confirmada y reembolsar `[TDD]` `[SEG]`
+**Spec:** secciones 5.1 (`/cancel`), 5.2 (`/refund`), 4.1 (`cancellation_policy`), 7.6
+
+**Descripcion:** `POST /api/bookings/[id]/cancel` y `POST /api/bookings/[id]/refund`. Es la
+tarea que **consume `computeRefund` de T8 en produccion**. Sin ella, los tramos de
+reembolso que se construyeron con tanto cuidado no tienen quien los use: la logica existiria
+y nadie la ejecutaria. T8 es la funcion pura; esta es el cableado.
+
+**Criterios de aceptacion:**
+- [ ] `POST /api/bookings/[id]/cancel` cancela la reserva y **dispara el reembolso con
+      `computeRefund`**, leyendo los tramos de `tenant_content['cancellation_policy']`
+- [ ] `POST /api/bookings/[id]/refund` permite al gestor ejecutar el mismo reembolso
+      (o el socio cancelar la suya)
+- [ ] Solo el dueno de la reserva o un gestor puede cancelar. Un tercero recibe 404
+- [ ] **Guarda el snapshot**: `refund_tier_hours_before` y `refund_percent_applied` en el
+      booking. Si el club cambia la politica despues, el socio sigue viendo que regla se
+      le aplico
+- [ ] `amount_refunded_cents` se actualiza y nunca supera `price_cents` (garantizado por
+      `check`)
+- [ ] `payment_status` pasa a `'refunded'`
+- [ ] **El slot se libera**: la reserva queda `cancelled` y el `EXCLUDE` deja de bloquear.
+      Test explicito: la pista vuelve a estar disponible
+- [ ] La reserva cancelada desaparece de "mis reservas" activas y pasa al historico
+- [ ] **Cancelar dos veces no devuelve el doble.** El segundo intento devuelve 409
+- [ ] Cancelar una reserva ya pasada no reembolsa. Si `starts_at` ya ocurrio, 422
+- [ ] El reembolso se hace contra el **PaymentIntent real** de Stripe, no contra el
+      `price_cents` local
+- [ ] Test de integracion de los 5 casos de la tabla: 25h->100%, 24h->100%, 20h->50%,
+      12h->50%, 5h->0%. **El importe devuelto por Stripe coincide con el del motor**
+
+**Verificacion:** tests de endpoint contra Stripe CLI · test de que cancelar dos veces no
+duplica el reembolso · test de que el slot se libera · la tabla de 5 casos pasando de
+`computeRefund` (T8) hasta el reembolso real de Stripe
+
+**Depende de:** T14 (el booking tiene que estar confirmado y pagado) · **Alcance:** M
+
+---
+
+### Checkpoint 3b: Reembolso
+- [ ] **Cancelar una reserva pagada devuelve el importe del tramo correcto, verificado
+      de punta a punta contra Stripe** (no solo la funcion pura de T8)
+- [ ] Los 5 casos de la tabla de tramos pasan de `computeRefund` al reembolso real
+- [ ] El snapshot (`refund_tier_hours_before`, `refund_percent_applied`) queda en el booking
+- [ ] Cancelar dos veces no devuelve el doble
+- [ ] El slot se libera y la pista vuelve a estar disponible
+- [ ] **Revision humana antes de seguir**
+
+---
+
+### [ ] T14c: Verificacion de menores en servidor `[TDD]` `[SEG]`
+**Spec:** secciones 4.1 (`min_player_age`), 4.4, 6.2, 7.5
+
+**Descripcion:** Tarea propia y separada para la correccion de seguridad mas importante del
+proyecto: **`is_minor` no se acepta del cliente**. Se calcula en servidor comparando
+`player_birth_date` con `tenants.min_player_age` (18 por defecto).
+
+Existe como tarea propia, y no como criterio implícito dentro de T9 o T11, porque un
+`check` en BD **no** cierra este agujero: si el servidor acepta `is_minor = false` del
+cuerpo de la peticion, el `check` ve `false` y no exige tutor. El menor se salta el
+requisito y el `check` ayuda en nada. Solo el calculo en servidor lo cierra.
+
+**Criterios de aceptacion:**
+- [ ] **TEST PRINCIPAL: el cliente envia `is_minor = false` con un `player_birth_date` que
+      da menor de edad segun `tenants.min_player_age`. El servidor lo RECALCULA a `true`
+      y exige los 4 campos de tutor. La reserva no se crea sin ellos**
+- [ ] El mismo test con un tenant de `min_player_age = 16`: con 17 anos, **no** es menor
+- [ ] El umbral sale de la BD, no de una constante en el codigo
+- [ ] Un tenant nuevo nace con `min_player_age = 18` sin que nadie lo configure
+- [ ] Si la fecha de nacimiento no se envia y el jugador es un adulto segun el umbral, la
+      reserva se crea normal. La fecha solo es obligatoria para quien es menor
+- [ ] El aviso de responsabilidad de `/reserva/confirmar` se muestra **si y solo si** el
+      servidor determino menor
+- [ ] El `check` de BD sigue existiendo como **segunda capa** (defensa en profundidad), no
+      como unica proteccion
+
+**Verificacion:** los 3 tests de manipulacion explicitamente nombrados · `pnpm test` verde
+
+**Depende de:** T9 · **Alcance:** S
 
 ---
 
@@ -434,28 +515,130 @@ por Resend. **Dominio unico compartido**, remitente por tenant.
 
 ---
 
-### [ ] T18: Pantallas socio 3-8 + panel de gestor
-**Spec:** secciones 6.1, 6.2, 6.3
+### [ ] T18a: Pantallas socio — disponibilidad y confirmacion
+**Spec:** secciones 6.1 (pantallas 3-4), 6.2, 7.8
 
-**Descripcion:** Disponibilidad, `/reserva/confirmar` (la critica), mis reservas, partidos,
-invitaciones, y el panel de gestor. **Dividir si supera 6 archivos.**
+**Descripcion:** `/pistas/[id]` con la rejilla de disponibilidad, y `/reserva/confirmar`,
+la pantalla mas delicada del MVP. Sin selector de duracion (OQ-4): 90 min fijos.
 
 **Criterios de aceptacion:**
 - [ ] **`/reserva/confirmar`: precio, politica de cancelacion y aviso de menor visibles
-      en un bloque, sin scroll, en 375x667, antes del boton de pago**
+      en un unico bloque, sin scroll, en 375x667, antes del boton de pago**
 - [ ] Es un unico bloque. **No repartido en pasos**
-- [ ] El aviso de menor aparece **si y solo si** el jugador es menor
-- [ ] Sin selector de duracion: 90 min fijo (OQ-4)
 - [ ] El boton de pago no aparece si el club no tiene los cobros conectados
-- [ ] Cero jerga en el panel de gestor: sin "registro", "endpoint", "configuracion",
-      "forzar", "debug"
-- [ ] `/admin/precios` muestra **vista previa** del resultado de cada regla antes de guardar
-- [ ] `/admin/marca` aplica color y logo en vivo
+- [ ] Sin selector de duracion
+- [ ] El precio mostrado viene del servidor, con IVA incluido y sin desglose
+- [ ] El scroll de pagina esta prohibido en esta ruta: scroll interno del bloque de texto
 
 **Verificacion:** **test de layout con Playwright en viewport 375x667, no a ojo** · test de
-copy sin jerga · E2E del camino completo socio
+que el bloque no se reparte
 
-**Depende de:** T14, T16, T17 · **Alcance:** L (dividir)
+**Depende de:** T12, T14c · **Alcance:** M
+
+---
+
+### [ ] T18b: Pantallas socio — mis reservas y partidos
+**Spec:** secciones 6.1 (pantallas 5-7), 7.4
+
+**Descripcion:** `/reservas` con historial y **cancelacion** (la UI que consume T14b),
+`/partidos` y `/partidos/[id]` con unirse e invitar.
+
+**Criterios de aceptacion:**
+- [ ] `/reservas` separa proximas y pasadas
+- [ ] Cancelar pide confirmacion y **muestra el importe que se va a devolver antes de
+      confirmar**, leyendo el tramo de `tenant_content`. El socio ve "se te devuelve el
+      50%" o "no hay devolucion" **antes** de pulsar
+- [ ] La UI de cancelar no existe si la reserva no es cancelable (ya empezada, ya
+      reembolsada)
+- [ ] Unirse a un partido actualiza plazas en vivo
+- [ ] El boton de invitar solo aparece con la reserva pagada
+
+**Verificacion:** E2E del camino socio completo · test de que el importe mostrado coincide
+con `computeRefund`
+
+**Depende de:** T14b, T15, T16 · **Alcance:** M
+
+---
+
+### [ ] T18c: Panel de gestor — pistas, bloqueos y reservas
+**Spec:** seccion 6.3 (pantallas 12, 13, 17), 7.9
+
+**Descripcion:** `/admin/pistas` con alta y edicion, `/admin/pistas/[id]/bloqueos` para
+mantenimiento, y `/admin/reservas` con listado y detalle.
+
+**Criterios de aceptacion:**
+- [ ] Copy coloquial. Cero jerga: sin "registro", "endpoint", "configuracion", "forzar",
+      "debug", "UUID"
+- [ ] "Anadir una pista" funciona de punta a punta sin documentacion
+- [ ] Un bloqueo de mantenimiento se refleja en la disponibilidad del socio
+- [ ] `/admin/reservas` filtra por fecha y muestra el detalle
+- [ ] Se puede completar todo el flujo sin leer documentacion
+
+**Verificacion:** revision con un gestor de club real · test de copy sin jerga
+
+**Depende de:** T5 · **Alcance:** M
+
+---
+
+### [ ] T18d: Panel de gestor — precios con vista previa
+**Spec:** seccion 6.3 (pantalla 14), 7.3, 7.9
+
+**Descripcion:** `/admin/precios`, el editor de `pricing_rules`. Es la pantalla de la que
+depende el motor de precios de T7, asi que va aparte.
+
+**Criterios de aceptacion:**
+- [ ] **Vista previa del resultado de cada regla antes de guardar**: "Los sabados por la
+      tarde cuestan mas"
+- [ ] Crear, editar, activar y desactivar una regla
+- [ ] El motor de precios se puede ejecutar contra la vista previa sin guardar
+- [ ] Copy sin jerga
+- [ ] Un cambio de regla **no altera reservas ya creadas** (el precio es snapshot)
+
+**Verificacion:** test de que la vista previa coincide con `resolvePrice` · test de que un
+cambio de regla no altera bookings existentes
+
+**Depende de:** T7, T12 · **Alcance:** M
+
+---
+
+### [ ] T18e: Panel de gestor — marca, noticias y ajustes
+**Spec:** seccion 6.3 (pantallas 11, 15, 16, 19), 7.1, 7.9
+
+**Descripcion:** `/admin` (dashboard), `/admin/marca` (colores y logo con preview en vivo),
+`/admin/noticias` (editor y publicar) y `/admin/ajustes` (features y `tenant_content`).
+
+**Criterios de aceptacion:**
+- [ ] `/admin/marca` aplica color y logo **en vivo**, sobre la propia app
+- [ ] `/admin/noticias` permite crear y publicar sin saber markdown
+- [ ] `/admin/ajustes`: cada toggle dice en una frase que pasa si se apaga
+- [ ] Apagar una feature con dependencias activas **se bloquea con explicacion**
+- [ ] `/admin` muestra ingresos, reservas de hoy y avisos
+- [ ] Copy sin jerga en las cuatro pantallas
+
+**Verificacion:** test de que el branding se aplica sin redeploy · test de copy sin jerga ·
+revision con gestor real
+
+**Depende de:** T6, T17 · **Alcance:** M
+
+---
+
+### [ ] T18f: Visibilidad de reembolsos en el panel
+**Spec:** secciones 5.2, 6.3, 7.6
+
+**Descripcion:** El gestor necesita **ver** los reembolsos que ha ejecutado, aunque la
+logica este en T14b. Sin esto, la pantalla de reservas no explica por que un socio recibio
+un importe.
+
+**Criterios de aceptacion:**
+- [ ] `/admin/reservas` muestra el importe reembolsado y el tramo aplicado
+- [ ] Se ve el `refund_percent_applied` de cada reserva, aunque la politica del club ya
+      haya cambiado
+- [ ] Un klik lleva al detalle del reembolso
+- [ ] Sin datos fiscales: ni factura, ni NIF, ni desglose de IVA
+
+**Verificacion:** test de que el tramo aplicado se ve aunque la politica haya cambiado
+
+**Depende de:** T14b · **Alcance:** S
 
 ---
 
@@ -464,6 +647,9 @@ copy sin jerga · E2E del camino completo socio
 - [ ] Invitar con booking no pagado devuelve 4xx
 - [ ] El email usa dominio unico y remitente por tenant
 - [ ] Test de layout 375x667 en verde
+- [ ] **El aviso de menor aparece si y solo si el servidor determino menor**, no si el
+      cliente lo pidio (T14c + T18a)
+- [ ] Cancelar muestra el importe a devolver **antes** de confirmar
 - [ ] **Revision humana con un gestor de club real antes de seguir**
 
 ---

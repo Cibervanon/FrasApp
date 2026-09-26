@@ -24,7 +24,7 @@ apps/padel-template  Next.js App Router. Orquesta todo
 ```
 
 **Por que `core` es una libreria y no una carpeta dentro de la app:** el motor de precios
-y el de reembolso son lo unico que hay que verificar con총 exhausividad. Si vivieran en
+y el de reembolso son lo unico que hay que verificar con exhausividad. Si vivieran en
 `app/lib`, cada test necesitaria arrancar Next y base de datos. Separados, corren con
 `vitest` en 40 ms y la cobertura del 100% es alcanzable de verdad.
 
@@ -102,9 +102,36 @@ Stripe en la Fase 4.
 | 0 | 0-2 | Monorepo, esquema base con RLS, `core` con config-schema |
 | 1 | 3-6 | `tenancy` completa, catalog, RLS verificada |
 | 2 | 7-8 | Motor de precios y motor de reembolso, TDD, 100% cobertura de `core` |
-| 3 | 9-14 | Reservas, hold, solapes, pagos con Connect, confirmacion |
-| 4 | 15-18 | Partidos abiertos, invitaciones, noticias |
+| 3 | 9-14c | Reservas, hold, solapes, pagos con Connect, confirmacion, **reembolso, menores** |
+| 4 | 15-18f | Partidos abiertos, invitaciones, noticias, **pantallas divididas en 6** |
 | 5 | 19-20 | RGPD, PWA, revision final |
+
+**Total: 28 tareas.** El desglose crecio desde 21 tras la revision del 2026-09-26: se
+anadieron T14b (reembolso), T14c (menores en servidor) y T18 se dividio en T18a-T18f.
+
+### Revision del 2026-09-26: tres huecos que se colaban entre spec y codigo
+
+Los tres los senalo el usuario antes de dar luz verde. Se documentan porque el patron
+importa mas que el arreglo: **una funcion pura sin tarea que la cablee es codigo muerto**,
+y **un criterio de seguridad sin checkpoint donde verificarla es un criterio que nadie
+mira.**
+
+1. **Reembolso sin consumidor.** T8 construia `computeRefund` y la spec definia
+   `/api/bookings/[id]/cancel` y `/refund`, pero **ninguna tarea los implementaba**. Los
+   tramos (25h→100%, 12h→50%) existian en el core y nadie los ejecutaba en produccion.
+   Corregido con T14b, que existe para cablear la funcion pura al refund real de Stripe.
+2. **Menores sin checkpoint.** El calculo en servidor aparecia como criterio suelto en T19
+   (RGPD, Fase 5), donde ya es tarde: la reserva se crea en la Fase 3. Si el bug estuviera
+   ahi, se descubriria tres fases despues. Corregido con T14c, mas un criterio explicito en
+   el Checkpoint 3 y en el 4.
+3. **T18 disfrazada de tarea.** "Pantallas 3-8 + panel de gestor" escondia CRUD de pistas,
+   CRUD de precios, editor de marca, CRUD de noticias, reembolsos y RGPD. Con la regla de
+   "un commit por tarea" eso produce un commit gigante. Corregido con T18a-T18f, seis
+   tareas con nombre.
+
+**Regla que sale de esta revision:** toda funcion pura construida con TDD tiene una tarea
+que la cablea a produccion, y todo criterio de seguridad aparece en un checkpoint, no solo
+en la tarea que lo implementa.
 
 ## Task List
 
@@ -155,8 +182,10 @@ Stripe en la Fase 4.
 - [ ] **T10** Test de concurrencia de holds con TDD (3 archivos, S)
 - [ ] **T11** `POST /api/holds` + `DELETE /api/holds` (4 archivos, M)
 - [ ] **T12** `pricing_rules` + endpoint de disponibilidad con precio (4 archivos, M)
-- [ ] **T13** Migracion + onboarding de Stripe Connect, `/admin/pagos` (6 archivos, L → dividir)
+- [ ] **T13** Stripe Connect, onboarding y `/admin/pagos` (6 archivos, M, dividido en 2)
 - [ ] **T14** `POST /api/payments/intent` + webhook + idempotencia (5 archivos, M)
+- [ ] **T14b** **Cancelar reserva confirmada y reembolsar** (4 archivos, M) — *añadido*
+- [ ] **T14c** **Verificacion de menores en servidor** (3 archivos, S) — *añadido*
 
 ### Checkpoint 3 — Reserva y pago
 
@@ -165,20 +194,39 @@ Stripe en la Fase 4.
 - [ ] El webhook es idempotente: reprocesar `event.id` no duplica efectos
 - [ ] El importe va al club: `transfer_data.destination` = `stripe_account_id`
 - [ ] El club paga exactamente el precio de la pista. Sin comision
+- [ ] **Un `is_minor = false` del cliente con fecha de menor se recalcula en servidor (T14c)**
+- [ ] Revision de seguridad: RLS, webhook, IAM de Connect
 
-### Fase 4: Partidos, invitaciones, noticias
+### Checkpoint 3b — Reembolso
+
+- [ ] **Cancelar una reserva pagada devuelve el importe del tramo correcto, verificado
+      de punta a punta contra Stripe** (no solo la funcion pura de T8)
+- [ ] Los 5 casos de la tabla pasan de `computeRefund` al reembolso real
+- [ ] El snapshot del tramo queda en el booking aunque la politica cambie despues
+- [ ] Cancelar dos veces no devuelve el doble
+- [ ] El slot se libera
+
+### Fase 4: Partidos, invitaciones, noticias y pantallas
 
 - [ ] **T15** `open_matches` + `open_match_participants` + transaccion con `booking` (5 archivos, M)
 - [ ] **T16** `invitations` + trigger de pago + envio por Resend (5 archivos, M)
 - [ ] **T17** `news_posts` + endpoints + pantalla publica (4 archivos, M)
-- [ ] **T18** Pantallas 3-8 del area socio + panel de gestor (6 archivos, L → dividir)
+- [ ] **T18a** Pantallas socio: disponibilidad y `/reserva/confirmar` (5 archivos, M) — *dividido*
+- [ ] **T18b** Pantallas socio: mis reservas, cancelar, partidos (5 archivos, M) — *dividido*
+- [ ] **T18c** Panel gestor: pistas, bloqueos, reservas (5 archivos, M) — *dividido*
+- [ ] **T18d** Panel gestor: precios con vista previa (4 archivos, M) — *dividido*
+- [ ] **T18e** Panel gestor: marca, noticias, ajustes (5 archivos, M) — *dividido*
+- [ ] **T18f** Visibilidad de reembolsos en el panel (2 archivos, S) — *dividido*
 
 ### Checkpoint 4 — Producto completo
 
 - [ ] Crear un partido abierto inserta su `booking` o falla entero
 - [ ] Invitar con booking en `held` devuelve 4xx. Trigger verificado
-- [ ] El repartidor de email usa dominio unico y remitente por tenant
+- [ ] El email saliente usa dominio unico y remitente por tenant
 - [ ] Test de layout: 375x667 sin scroll en `/reserva/confirmar`
+- [ ] El aviso de menor depende de lo que determino el **servidor**, no de lo que pidio
+      el cliente
+- [ ] Cancelar muestra el importe a devolver antes de confirmar
 
 ### Fase 5: Cierre
 
@@ -229,7 +277,7 @@ Ninguna bloquea. Ver seccion 15.1 de la spec.
 ## Notas de ejecucion
 
 - **Un commit por tarea.** Nunca dos tareas en un commit.
-- **TDD obligatorio** en: T7, T8, T9, T10, T11, T15, T16, T19. Toca `tenant_id`, RLS,
+- **TDD obligatorio** en: T1, T3, T7, T8, T9, T10, T11, T14, T14b, T14c, T15, T16, T19, T20. Toca `tenant_id`, RLS,
   precios o reservas.
 - **Postgres real, nunca mocks**, para cualquier cosa que toque RLS o `EXCLUDE`. Una RLS
   probada contra un motor que no es Postgres no prueba nada.

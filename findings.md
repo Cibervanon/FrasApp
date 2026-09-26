@@ -131,6 +131,34 @@ Ciclo obligatorio: DEFINE (spec) -> PLAN -> BUILD -> VERIFY -> REVIEW -> SHIP.
 
 Ninguna todavia.
 
+## Patrones de fallo entre spec y plan (2026-09-26)
+
+Tres huecos que el usuario senalo antes de dar luz verde. Se guardan porque el **patron**
+reaparece en cualquier plan, no porque sean especificos de este proyecto.
+
+1. **Funcion pura sin consumidor.** T8 construia `computeRefund` con TDD y la spec
+   definia `/api/bookings/[id]/cancel` y `/refund`, pero ninguna tarea los implementaba.
+   La logica existia y nadie la ejecutaba en produccion. Un `check` de cobertura al 100%
+   no dice nada de esto: la funcion estaba cubierta al 100% y aun asi era codigo muerto.
+   **Regla:** toda funcion pura con TDD tiene una tarea que la cablea a produccion.
+
+2. **Criterio de seguridad en la fase equivocada.** El calculo de `is_minor` en servidor
+   estaba como criterio suelto en T19 (RGPD, Fase 5), pero la reserva se crea en la Fase 3.
+   Mal hecho, el bug se descubre tres fases despues, cuando ya hay codigo de pago
+   construido encima. **Regla:** todo criterio de seguridad aparece en un checkpoint de la
+   fase donde se introduce, no solo en la tarea que lo implementa.
+
+3. **Alcance L es una promesa, no un plan.** "T18: pantallas 3-8 + panel de gestor" con
+   la nota "dividir si supera 6 archivos" produce un commit gigante, porque la nota no
+   divide nada. Dividirlo a mano en seis tareas con nombre fue ~10 minutos de trabajo que
+   evitaba un commit imposible de revisar. **Regla:** dividir en el momento de detectar el
+   alcance, no al llegar a la tarea.
+
+Nota sobre el punto 2: un `check` en BD **no** cierra el agujero de `is_minor`. Si el
+servidor acepta `is_minor = false` del cuerpo de la peticion, el `check` ve `false`, no
+exige tutor, y el menor se salta el requisito. Solo recalcular en servidor lo cierra; el
+`check` es segunda capa.
+
 ---
 
 *Actualizar durante la investigacion para no perder evidencia.*
