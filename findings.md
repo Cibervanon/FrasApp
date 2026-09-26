@@ -259,6 +259,36 @@ la siguiente tarea no es asi lo que parece**: el problema no es el desconocimien
 escribir un glob dentro de un bloque de comentario es un reflejo automatico. La mitigacion
 practica es no escribir globs en prosa, y describirlos ("los `.db.test.ts`").
 
+## En un monorepo, un `.gitignore` con `/` interno se ancla a la raiz y no hace nada (T0)
+
+T0 escribio el `.gitignore` como si el proyecto fuera un solo paquete de Next:
+
+```
+supabase/.temp/
+supabase/.branches/
+supabase/.env
+```
+
+Funcionaba, porque `supabase/` estaba en la raiz. En cuanto la app se metio en
+`apps/padel-template/`, esos tres patrones dejaron de cubrir nada: un patron que
+contiene `/` se ancla al directorio donde esta el `.gitignore`, asi que
+`supabase/.temp/` solo casa con `<raiz>/supabase/.temp/`, nunca con
+`apps/padel-template/supabase/.temp/`.
+
+**Un `.gitignore` que no casa con nada no da error: simplemente no esta.** Se descubrio
+porque la CLI de Supabase creo `supabase/.temp/cli-latest` y se coló en un commit.
+Sin ese archivo, el fallo habria seguido latente hasta el dia que alguien hiciera
+commit de un `supabase/.env` con secretos reales.
+
+Corregido a `**/supabase/.temp/`, y con ese prefijo en todos los patrones de ruta
+anidada. Comprobado con `git check-ignore -v`, que ademas avisa de que `check-ignore`
+no informa de archivos **ya trackeados**: hay que sacarlos del indice primero, o
+prueba un verde falso.
+
+Y la regla general que sale de aqui: en un monorepo, todo patron con ruta en
+`.gitignore` necesita `**/` delante. La excepcion es un patron de una sola
+segmentacion (`node_modules/`, `dist/`), que ya es global.
+
 ---
 
 *Actualizar durante la investigacion para no perder evidencia.*

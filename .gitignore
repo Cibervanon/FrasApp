@@ -26,9 +26,12 @@ blob-report/
 !.env.example
 
 # Supabase
-supabase/.temp/
-supabase/.branches/
-supabase/.env
+# El prefijo **/ es obligatorio: un patron con "/" interno se ancla a la raiz del
+# repo, asi que "supabase/.temp/" no cubria apps/padel-template/supabase/.temp/
+# y el ignore pasaba silenciosamente sin efecto.
+**/supabase/.temp/
+**/supabase/.branches/
+**/supabase/.env
 
 # Sistema
 .DS_Store
