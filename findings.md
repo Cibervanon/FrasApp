@@ -221,6 +221,44 @@ real intenta configurar algo. Un test que exercise el caso normal lo caza en el 
 - **Un `tsconfig` que excluye los tests hace que `typecheck` no los mire.** Hay un segundo
   config (`tsconfig.test.json`) solo para typecheck, que si incluye `*.test.ts`.
 
+## Un validador Zod sin contrastar con su tabla es un contrato que no encaja (T1)
+
+El `config-schema` de T0 lo escribi leyendo la idea general de la spec, no la tabla
+`tenant_branding` ni la lista de `feature_key`. Resultado: **solo coincidian 2 de 5** cosas.
+
+| | Spec 4.1 | Lo que escribi en T0 |
+|---|---|---|
+| `feature_key` | `calendar, booking, payments, open_matches, news, gdpr_export, push_notifications` | `open_matches, news, guest_bookings, online_payments, advanced_pricing` |
+| branding | 8 columnas con `secondary_color`, `favicon_path`, `hero_image_path`, `font_family` | 5 campos, `accentColor` en vez de `secondary_color` |
+| tramo de cancelacion | `hours_before`, `refund_percent`, `label` | `minHoursBefore`, `percent`, **sin `label`** |
+
+Lo que falla en la practica: T1 siembra las 7 features de la spec y el validador **rechazaba
+5 de 7**, rompiendo la seed. Y `label` no es un campo mas: es el texto que ve el socio y lo
+escribe el gestor del club, asi que sin el la app tendria que hardcodear el copy y la regla 1
+lo prohibe.
+
+**Regla:** el esquema se escribe **junto a la migracion**, no antes. Si el validador y el DDL
+se hacen en tareas distintas sin contrastarlos, el primero se inventa cosas. El test que fija
+las 7 `feature_key` es lo que convierte esto en algo que no vuelve a pasar: si la spec anade
+una feature, el test obliga a actualizar la seed en el mismo commit.
+
+Y el criterio T1 de que `tenants` tiene `stripe_application_fee_cents`: **esa columna no
+existe en `tenants`**, vive en `bookings` (4.2) y la crea T9. Un criterio de aceptacion que
+describia una columna inexistente habria hecho escribir una migracion que el Postgres
+rechazaria, o peor, anadir una columna de mas que nadie pidio.
+
+## `*/` dentro de un comentario de bloque: segunda vez (T0 y T1)
+
+En T0 escribi el glob `**/*.ts` en el JSDoc de `eslint.config.mjs` y el `*/` cerro el
+comentario antes de tiempo. En T1 **repeti exactamente el mismo error** con
+`src/lib/**/*.db.test.ts` en el JSDoc de `vitest.config.ts`. Cuatro errores de typecheck y
+un `SyntaxError` que no senala el fichero.
+
+Estaba escrito en este mismo fichero como trampa conocida. **Conocer un fallo y repetirlo en
+la siguiente tarea no es asi lo que parece**: el problema no es el desconocimiento, es que
+escribir un glob dentro de un bloque de comentario es un reflejo automatico. La mitigacion
+practica es no escribir globs en prosa, y describirlos ("los `.db.test.ts`").
+
 ---
 
 *Actualizar durante la investigacion para no perder evidencia.*

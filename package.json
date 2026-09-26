@@ -12,9 +12,11 @@
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "test": "turbo run test",
+    "test:db": "turbo run test:db",
     "test:e2e": "turbo run test:e2e",
     "db:reset": "pnpm --filter @frasapp/padel-template db:reset",
-    "verify": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build"
+    "db:start": "pnpm --filter @frasapp/padel-template db:start",
+    "verify": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:db && pnpm run build"
   },
   "devDependencies": {
     "turbo": "2.11.4",

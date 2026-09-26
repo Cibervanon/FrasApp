@@ -49,12 +49,20 @@ identidad), las otras tres si.
 - [ ] Las 4 tablas existen con `tenant_id` en la clave primaria donde corresponda
 - [ ] Las 3 tablas de negocio tienen `FORCE ROW LEVEL SECURITY` y politica por operacion
 - [ ] `tenants.min_player_age` con `check (min_player_age between 14 and 21)`, default 18
-- [ ] `tenants.stripe_application_fee_cents` con `default 0` y `not null`
-- [ ] Seed con 1 tenant de demo, sus 4 filas de branding, y una fila por cada
-      `feature_key` del MVP
+- [ ] Las 4 columnas de Stripe Connect en `tenants`: `stripe_account_id`,
+      `stripe_charges_enabled`, `stripe_payouts_enabled`, `stripe_onboarding_completed_at`
+- [ ] Seed con 1 tenant de demo, su fila de branding, y una fila por cada uno de los
+      **7** `feature_key` de la spec
+- [ ] `tenant_content['cancellation_policy']` sembrado con los 3 tramos por defecto,
+      **cada uno con su `label`** (lo ve el socio)
+- [ ] `config-schema` valida la fila que devuelve la BD: los 7 `feature_key`, el branding
+      de 8 columnas y los tramos `hours_before` / `refund_percent` / `label`
+
+**Nota:** `stripe_application_fee_cents` **no** es de `tenants`. Vive en `bookings`
+(seccion 4.2) y se crea en T9. Este criterio estaba aqui por error y se ha quitado.
 
 **Verificacion:** `pnpm db:reset` sin error · test de integracion: un JWT de tenant A no lee
-ninguna fila de tenant B en las 3 tablas
+ninguna fila de tenant B en las 3 tablas con RLS
 
 **Depende de:** T0 · **Alcance:** M
 
@@ -83,7 +91,9 @@ devuelve nada
 ### Checkpoint 0
 - [ ] `pnpm install` y `pnpm build` limpios
 - [ ] `pnpm db:reset` aplica migraciones sin error
-- [ ] Un JWT de tenant A no lee nada de tenant B en las 4 tablas de tenancy
+- [ ] Un JWT de tenant A no lee nada de tenant B en las **3 tablas con RLS**
+      (`tenant_branding`, `tenant_features`, `tenant_content`). `tenants` es la tabla de
+      identidad y **no** lleva RLS de tenant, asi que queda fuera de esta comprobacion
 - [ ] `core` tiene tests y corre sin browser
 - [ ] **Revision humana antes de seguir**
 

@@ -61,10 +61,16 @@ Phase 3
 - [ ] TDD en las 14 tareas marcadas `[TDD]`
 - [ ] Revision de seguridad en las 9 tareas marcadas `[SEG]`
 - [ ] Dividir T13 antes de empezarla (alcance L)
-- [x] **T0 completa**: monorepo, tooling, 3 packages, app Next 16, 12 tests
+- [ ] **T0 completa**: monorepo, tooling, 3 packages, app Next 16, 12 tests
+- [ ] **T1 BLOQUEADA**: migracion, seed y test de RLS escritos, pero sin ejecutar. Falta
+      Postgres (Docker + Supabase CLI, requiere admin). `pnpm test:db` da ECONNREFUSED
+- [ ] T0 y T1 han cerrado el config-schema contra la tabla real: 7 feature_keys de la spec,
+      branding de 8 columnas, tramos con `label`
 - **Status:** in_progress
 
-**Tarea actual: T1** (migracion inicial de tenancy, `[TDD]` `[SEG]`)
+**Bloqueo actual:** `pnpm db:reset` y `pnpm test:db` no pueden ejecutarse. Requiere
+instalar WSL2 + Docker Desktop + Supabase CLI desde una consola de administrador.
+T1 sigue ABIERTA: la migracion no se ha ejecutado ni una vez.
 
 ### Phase 5: VERIFY
 

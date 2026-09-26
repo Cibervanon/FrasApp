@@ -5,57 +5,109 @@ import { z } from "zod";
  * frontera entre la base de datos y la UI: si la BD trae algo mal, quiero que
  * falle aqui y no con un `undefined` en pantalla.
  *
- * Aqui viven los **valores por defecto**, no los de un club concreto. Los
- * valores por defecto de la spec (18 anos, 90 minutos, tramos 24/12h, 3 min
- * de hold) son constantes, no configuracion de tenant, y viven en `core`.
+ * **Espejo de la base de datos, en snake_case.** A proposito, no por descuido.
+ * Este esquema valida lo que *viene de la BD*, asi que si un parseo falla el
+ * error senala una columna real (`primary_color`) y no un campo inventado
+ * (`primaryColor`). Una capa de mapeo seria mas agradable en la UI, pero
+ * anade un sitio mas donde el esquema puede desincronizarse de la migracion
+ * sin que nada lo note. La app convierte a camelCase en el borde de la UI si
+ * lo quiere.
+ *
+ * Los **valores por defecto** de la spec (18 anos, 90 minutos, tramos 24/12h,
+ * 3 min de hold) NO viven aqui: son constantes del dominio, no configuracion de
+ * tenant, y van en `core`.
  */
 
 const hexColor = z
   .string()
   .regex(/^#[0-9a-fA-F]{6}$/, "Color hex de 6 digitos, con # inicial");
 
-/** Marca. Sin valores por tenant: se rellena desde tenant_branding. */
+/**
+ * Rutas de fichero en Supabase Storage, no URLs. Se guardan relativas al
+ * bucket para que cambien de dominio no rompan nada.
+ */
+const storagePath = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(/^[A-Za-z0-9/_.-]+$/, "Ruta de Storage: sin espacios ni esquema");
+
+/** Espejo de `tenant_branding`. */
 export const brandingSchema = z.object({
-  primaryColor: hexColor,
-  accentColor: hexColor,
-  logoUrl: z.string().url().nullable(),
-  /** Nombre que aparece como remitente en los emails. */
-  senderName: z.string().min(1).max(60),
-  replyToEmail: z.string().email(),
+  primary_color: hexColor,
+  secondary_color: hexColor,
+  logo_path: storagePath.nullable(),
+  favicon_path: storagePath.nullable(),
+  hero_image_path: storagePath.nullable(),
+  font_family: z.string().min(1).max(80),
+  /** Nombre que ve el socio como remitente. El club no configura SMTP (OQ-10). */
+  email_from_name: z.string().min(1).max(60),
+  email_reply_to: z.string().email(),
 });
 export type BrandingConfig = z.infer<typeof brandingSchema>;
 
+/**
+ * Los 7 `feature_key` de la spec. Es un enum de texto, no un booleano suelto,
+ * para anadir una feature no requiera migracion.
+ *
+ * Cada feature del MVP **debe** tener su fila en `tenant_features`. Sin
+ * excepcion (regla 3). Si anades una aqui, anade su fila en la seed T1 y su
+ * flag en `tenant_features`.
+ */
 export const featureKeySchema = z.enum([
+  "calendar",
+  "booking",
+  "payments",
   "open_matches",
   "news",
-  "guest_bookings",
-  "online_payments",
-  "advanced_pricing",
+  "gdpr_export",
+  "push_notifications",
 ]);
 export type FeatureKeyConfig = z.infer<typeof featureKeySchema>;
 
+/** Las 7 keys del MVP, en el mismo orden que la seed. */
+export const MVP_FEATURE_KEYS = [
+  "calendar",
+  "booking",
+  "payments",
+  "open_matches",
+  "news",
+  "gdpr_export",
+  "push_notifications",
+] as const satisfies readonly FeatureKeyConfig[];
+
 /**
- * Tramo de reembolso. El orden y el no solape los verifica el superRefine del
- * contrato completo, no el tipo: el tipo no puede.
+ * Tramo de reembolso. Espejo del JSON de
+ * `tenant_content['cancellation_policy']`.
+ *
+ * `label` no es decorativo: es el texto que ve el socio en
+ * `/reserva/confirmar` y en la pantalla de cancelar, y lo escribe el gestor
+ * del club. Sin el, habria que hardcodear el copy en la app, y la regla 1 lo
+ * prohibe.
  */
 export const refundTierSchema = z.object({
-  minHoursBefore: z.number().int().min(0).max(720),
-  percent: z.number().int().min(0).max(100),
+  hours_before: z.number().int().min(0).max(720),
+  refund_percent: z.number().int().min(0).max(100),
+  label: z.string().min(1).max(200),
 });
 export type RefundTierConfig = z.infer<typeof refundTierSchema>;
 
+/**
+ * Politica de cancelacion. El orden y la coherencia los verifica el
+ * superRefine: el tipo no puede.
+ */
 export const cancellationPolicySchema = z
   .object({
     tiers: z.array(refundTierSchema).min(1),
+    policy_text: z.string().min(1).max(2000),
+    notice_text: z.string().min(1).max(2000),
   })
   .superRefine((policy, ctx) => {
-    // Ordenamos de mas a menos antelacion: 24h, 12h, 0h. En ese orden, el
+    // Ordenamos de mas a menos antelacion: 24h, 12h, 0h. En ese orden el
     // porcentaje debe ser **no creciente**: menos aviso, menos devolucion.
-    // Decrecer es lo normal y lo correcto (24h->100%, 12h->50%, 0h->0%).
-    // Lo incoherente es lo contrario: que con menos aviso se devuelva mas.
-    const sorted = [...policy.tiers].sort(
-      (a, b) => b.minHoursBefore - a.minHoursBefore,
-    );
+    // Decrecer es lo normal (24h->100%, 12h->50%, 0h->0%). Lo incoherente es lo
+    // contrario: que con menos aviso se devuelva mas.
+    const sorted = [...policy.tiers].sort((a, b) => b.hours_before - a.hours_before);
 
     for (let i = 1; i < sorted.length; i += 1) {
       const prev = sorted[i - 1];
@@ -63,17 +115,17 @@ export const cancellationPolicySchema = z
       if (prev === undefined || current === undefined) {
         continue;
       }
-      if (prev.minHoursBefore === current.minHoursBefore) {
+      if (prev.hours_before === current.hours_before) {
         ctx.addIssue({
           code: "custom",
-          message: `Dos tramos con el mismo minHoursBefore (${current.minHoursBefore}). El calculo seria ambiguo`,
+          message: `Dos tramos con el mismo hours_before (${current.hours_before}). El calculo seria ambiguo`,
           path: ["tiers", i],
         });
       }
-      if (current.percent > prev.percent) {
+      if (current.refund_percent > prev.refund_percent) {
         ctx.addIssue({
           code: "custom",
-          message: `El tramo de ${current.minHoursBefore}h devuelve MAS (${current.percent}%) que el de ${prev.minHoursBefore}h (${prev.percent}%). Con menos aviso no se devuelve mas: incoherente`,
+          message: `El tramo de ${current.hours_before}h devuelve MAS (${current.refund_percent}%) que el de ${prev.hours_before}h (${prev.refund_percent}%). Con menos aviso no se devuelve mas: incoherente`,
           path: ["tiers", i],
         });
       }
@@ -81,17 +133,30 @@ export const cancellationPolicySchema = z
   });
 export type CancellationPolicyConfig = z.infer<typeof cancellationPolicySchema>;
 
-/** Contrato completo de un tenant. */
+/** Espejo de `tenant_content['cancellation_policy']`. */
+export const contentKeySchema = z.enum([
+  "cancellation_policy",
+  "terms_notice",
+  "about_club",
+]);
+export type ContentKeyConfig = z.infer<typeof contentKeySchema>;
+
+/** Contrato completo de un tenant: lo que la app necesita para renderizar. */
 export const tenantConfigSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(80),
   slug: z
     .string()
     .min(2)
     .max(40)
     .regex(/^[a-z0-9-]+$/, "Slug en minusculas, digitos y guiones"),
-  name: z.string().min(1).max(80),
-  minPlayerAge: z.number().int().min(14).max(21).default(18),
+  currency: z.string().length(3).default("eur"),
+  timezone: z.string().min(1).max(64).default("Europe/Madrid"),
+  locale: z.string().min(2).max(16).default("es-ES"),
+  /** 14 a 21, default 18. Lo usa el calculo de menores en servidor (OQ-8). */
+  min_player_age: z.number().int().min(14).max(21).default(18),
   branding: brandingSchema,
   features: z.array(featureKeySchema),
-  cancellationPolicy: cancellationPolicySchema,
+  content: z.record(contentKeySchema, z.unknown()),
 });
 export type TenantConfig = z.infer<typeof tenantConfigSchema>;

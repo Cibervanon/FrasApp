@@ -15,23 +15,43 @@ import type { BookingStatus } from "@frasapp/core";
 describe("app: consumo de los packages del monorepo", () => {
   it("resuelve @frasapp/config-schema en runtime", () => {
     const result = tenantConfigSchema.safeParse({
-      slug: "club-norte",
+      id: "3f9a1c62-0b7d-4c8e-9a11-5d2e7b4c1a90",
       name: "Club Padel Norte",
-      minPlayerAge: 18,
+      slug: "club-norte",
+      min_player_age: 18,
       branding: {
-        primaryColor: "#1a4d8f",
-        accentColor: "#e8a33d",
-        logoUrl: null,
-        senderName: "Club Padel Norte",
-        replyToEmail: "padel@clubnorte.example",
+        primary_color: "#1a4d8f",
+        secondary_color: "#e8a33d",
+        logo_path: null,
+        favicon_path: null,
+        hero_image_path: null,
+        font_family: "Inter",
+        email_from_name: "Club Padel Norte",
+        email_reply_to: "padel@clubnorte.example",
       },
-      features: ["online_payments"],
-      cancellationPolicy: {
-        tiers: [
-          { minHoursBefore: 24, percent: 100 },
-          { minHoursBefore: 12, percent: 50 },
-          { minHoursBefore: 0, percent: 0 },
-        ],
+      features: ["calendar", "booking", "payments"],
+      content: {
+        cancellation_policy: {
+          tiers: [
+            {
+              hours_before: 24,
+              refund_percent: 100,
+              label: "Cancelacion gratuita hasta 24h antes",
+            },
+            {
+              hours_before: 12,
+              refund_percent: 50,
+              label: "Entre 24h y 12h antes se devuelve el 50%",
+            },
+            {
+              hours_before: 0,
+              refund_percent: 0,
+              label: "Con menos de 12h no hay devolucion",
+            },
+          ],
+          policy_text: "Texto de la politica",
+          notice_text: "Texto del aviso",
+        },
       },
     });
 

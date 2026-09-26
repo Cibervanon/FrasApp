@@ -11,8 +11,10 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:db": "vitest run --config vitest.db.config.ts",
     "test:e2e": "playwright test",
-    "db:reset": "supabase db reset"
+    "db:reset": "supabase db reset",
+    "db:start": "supabase start"
   },
   "dependencies": {
     "@frasapp/config-schema": "workspace:*",
@@ -27,10 +29,12 @@
     "@playwright/test": "1.63.0",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "26.6.3",
+    "@types/pg": "8.15.6",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.6",
+    "pg": "8.16.3",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
     "vitest": "5.0.2"

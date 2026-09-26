@@ -271,15 +271,79 @@ compila pero no se puede lintear es una decision, no un_atajo.
 La spec lista **9** variables de entorno, no 8. El "8" venia de un resumen mio anterior y
 se habia metido en los criterios de T0. Corregido en `tasks/todo.md`.
 
+## Session: 2026-09-26 (8) - T1 tenancy: SQL escrito, BLOQUEADO sin Postgres
+
+### Estado: T1 NO cerrada
+
+La migracion, la seed y el test de RLS estan escritos y verificados en lo que se puede
+verificar sin base de datos. **El SQL no se ha ejecutado nunca.** `pnpm test:db` falla con
+`ECONNREFUSED :54322`. T1 sigue abierta.
+
+### El bloqueo
+
+Ni Docker, ni Supabase CLI, ni psql, ni Postgres local. Ademas **esta sesion no es admin**
+(`Admin: False`) y **WSL no esta instalado**, que es el backend que necesita Docker Desktop.
+Ni `winget` ni `wsl --install` pueden elevarse solas. El usuario eligio la via Docker +
+Supabase CLI, pero hay que ejecutarla desde una consola de administrador.
+
+### Bug grave encontrado: el config-schema de T0 contradecía la spec
+
+Lo que yo habia escrito en T0 no existia en la spec. **Solo coincidian 2 de 5** cosas:
+
+| | Spec (4.1) | Mi config-schema de T0 |
+|---|---|---|
+| `feature_key` | `calendar, booking, payments, open_matches, news, gdpr_export, push_notifications` | `open_matches, news, guest_bookings, online_payments, advanced_pricing` |
+| branding | 8 columnas, incluida `secondary_color`, `favicon_path`, `hero_image_path`, `font_family` | 5 campos, con `accentColor` en vez de `secondary_color` |
+| tramo | `hours_before`, `refund_percent`, **`label`** | `minHoursBefore`, `percent`, **sin label** |
+
+Consecuencia concreta: T1 siembra las 7 features de la spec y el validador habria
+**rechazado 5 de 7**, rompiendo la seed. Ademas `label` es el texto que ve el socio y lo
+escribe el gestor: sin el, la app tendria que hardcodear el copy, y la regla 1 lo prohibe.
+
+Corregido a espejo de la BD en snake_case (decision del usuario). 14 tests en
+config-schema, uno de los cuales **fija las 7 feature_keys**: si la spec anade o quita una,
+el test obliga a actualizar la seed en el mismo commit.
+
+### Segundo criterio erroneo del plan
+
+`tenants.stripe_application_fee_cents` **no existe en `tenants`**. Vive en `bookings`
+(seccion 4.2) y lo crea T9. El criterio de T1 lo daba por bueno; quitado. Tambien
+"4 tablas de tenancy" en el Checkpoint 0, cuando `tenants` no lleva RLS de tenant: son 3.
+
+### Diseno de la migracion
+
+- `current_tenant_id()` en vez de repetir el cast del claim en 12 politas. Si un typo
+  devolviera NULL, la politica daria 0 filas en silencio, no un error.
+- Politicas **por operacion** (12 = 3 tablas x 4). Los INSERT llevan `WITH CHECK` explicito:
+  sin el, una politica `USING` deja insertar filas de otro tenant aunque no puedas leerlas.
+- `FORCE ROW LEVEL SECURITY` en las 3. Sin FORCE, el webhook de Stripe (service_role) se
+  salta todo: exactamente el camino que actualiza `stripe_charges_enabled`.
+- `feature_key` con `check` contra la lista de 7. Anadir una feature es anadir su fila aqui
+  **y** su fila en la seed, nunca un booleano suelto.
+
+### Verificado sin Postgres
+
+- 4 tablas, 3 `enable` + 3 `force` (no en `tenants`), 12 politas, 3 triggers, 2 funciones.
+- Seed: 4 sentencias parseadas OK con pgsql-ast-parser.
+- typecheck y lint verdes. 19 tests unitarios verdes.
+- `test:db` **falla ruidosamente** con ECONNREFUSED, no hace skip silencioso. Un verde
+  silencioso en RLS seria peor que un rojo.
+
+### Repetido por segunda vez: `*/` dentro de un comentario de bloque
+
+`src/lib/**/*.db.test.ts` escrito en el JSDoc de `vitest.config.ts` cerro el comentario antes
+de tiempo. 4 errores de typecheck. Ya estaba en findings.md como trampa de T0 y **lo he
+repetido**. regla: no escribir globs con `*` seguido de `/` dentro de comentarios de bloque.
+
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 4 BUILD, **T0 completa**, empezando **T1** (migracion inicial de tenancy) |
-| Where am I going? | T1 -> T20 + T14b,T14c,T18a-T18f, un commit por tarea, 7 checkpoints |
+| Where am I? | Phase 4 BUILD, **T1 abierta y BLOQUEADA**: SQL escrito pero sin ejecutar |
+| Where am I going? | Levantar Supabase local, ejecutar `pnpm db:reset` + `pnpm test:db`, cerrar Checkpoint 0, seguir con T2 |
 | What's the goal? | Plantilla PWA `padel-template`: reservas, precio dinamico, pago con Stripe Connect, partidos abiertos |
-| What have I learned? | Ver findings.md. Los tres patrones spec->plan, la trampa de IMMUTABLE en EXCLUDE, y que "usar la ultima version" falla: TS 7 y ESLint 10 compilan pero no se pueden lintear |
-| What have I done? | Bootstrap, spec (13 decisiones), plan (28 tareas), **T0 con 12 tests + E2E**. Commits: `5ec7764`, `2a90d30`, `7a85293`, y este |
+| What have I learned? | Escribir un validador Zod sin contrastarlo con la tabla que valida produce un contrato que no encaja con la BD. Y `*/` en un comentario de bloque: segunda vez en el mismo proyecto |
+| What have I done? | Bootstrap, spec, plan (28 tareas), T0, y T1 escrita pero sin verificar. Commits: `5ec7764`, `2a90d30`, `7a85293`, `dfa40b6`, y este |
 
 ---
 
