@@ -409,3 +409,25 @@ devuelve el 50%. No se ha inventado un `partially_refunded`: se decide antes de 
 ---
 
 *Actualizar tras cada fase, validacion o error.*
+
+## PostgreSQL local cerrado (accion del usuario)
+
+- `Restart-Service postgresql-x64-17` en PowerShell elevado. El error previo, "No se
+  puede abrir el servicio", era solo eso: la consola no estaba elevada. No hacia falta
+  instalar ni configurar nada mas.
+- `show listen_addresses` devuelve `localhost` y el 5432 escucha unicamente en
+  `127.0.0.1` y `::1`. Antes estaba en `0.0.0.0` y `::`, o sea en todas las interfaces.
+- Clave cambiada por indicacion del usuario. Verificado en las dos direcciones: la nueva
+  entra y la antigua falla con "password authentication failed". La clave NO se escribe
+  en ningun fichero commiteado; vive solo en `apps/padel-template/.env.local`, que sigue
+  ignorado por `.gitignore:24`.
+- Propagar el cambio de clave obliga a tocar `.env.local` en el MISMO paso. Si se
+  cambia en la base y no en el fichero, `db:reset` y `test:db` dejan de autenticar y
+  parece un fallo de la suite cuando el problema es una variable.
+- Comprobado despues: `pnpm db:reset` aplica shim + migracion + seed, y los 12 tests de
+  RLS siguen en verde con la clave nueva.
+
+Recordatorio util: `listen_addresses` solo se aplica al REINICIAR. Un reload de
+configuracion no cambia nada, asi que editar el fichero y recargar deja el servidor
+igual que antes, y da la sensacion de que el cambio no funciona.
+---

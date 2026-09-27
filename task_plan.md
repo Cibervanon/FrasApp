@@ -79,11 +79,10 @@ aislamiento entre tenants esta probado de verdad, no con mocks.
 nativo 17 en local en vez de Docker, `pnpm db:reset` propio, shim de `auth` recreando
 lo que monta Supabase.
 
-**Pendiente, requiere accion del usuario:** `postgresql.conf` ya dice
-`listen_addresses = 'localhost'`, pero el servicio sigue sin reiniciar, asi que el
-servidor ACTIVO continua en `*` con clave `postgres`. El agente no tiene elevacion:
-hay que ejecutar `Restart-Service postgresql-x64-17` en PowerShell como Administrador
-y luego comprobar `show listen_addresses`.
+**PostgreSQL local, cerrado:** el servidor esta en `listen_addresses = 'localhost'`, el
+5432 escucha solo en `127.0.0.1` y `::1`, `pg_hba` usa `scram-sha-256` en todas sus
+lineas, y la clave ya no es la de fabrica. `pg_hba.conf` nunca ha tenido `trust`, asi que
+no hizo falta tocarlo. Comprobado que la clave vieja ya no entra.
 
 **Pendiente de decidir con el usuario, no bloquea:** si un reembolso parcial se
 representa anadiendo un `partially_refunded` a `PaymentStatus`. La spec enumera 3
