@@ -11,7 +11,7 @@ import { baseQuery } from "./db";
  *
  * Lo que NO se ha hecho, a proposito:
  *
- *   - Una tabla `tenant_hosts` (host -> tenant). Seria la machinery correcta si varios
+ *   - Una tabla `tenant_hosts` (host -> tenant). Seria la maquinaria correcta si varios
  *     clubes compartieran instancia, y hoy no lo hacen. Ademas pondria datos de routing en
  *     la base, que es el sitio mas caro de migrar cuando el routing cambie.
  *
@@ -21,7 +21,7 @@ import { baseQuery } from "./db";
  *
  *   - Resolver el tenant por peticion, ni siquiera "solo en desarrollo". Es la linea que
  *     separa esto de un `?tenant_id=` que filtra el catalogo de otro club, y no hace
- *     falta para nada: el tests de abajo comprueban que un `tenant_id` en la query no
+ *     falta para nada: los tests de abajo comprueban que un `tenant_id` en la query no
  *     cambia nada.
  *
  * La cache es por una razon operativa, no por gusto: es una indexed lookup por `slug`, pero
@@ -37,7 +37,7 @@ let cached: string | null = null;
  *
  * Falla ruidosamente y con un mensaje accionable si la variable falta, si el slug no esta
  * en la base, o si hay mas de una fila (que no puede pasar: `slug` es `unique`, pero el
- * `limit 2` esta para que un `unique` que alguienQuite un dia no se convierta en un
+ * `limit 2` esta para que un `unique` que alguien quite un dia no se convierta en un
  * "devuelvo el primero" silencioso).
  */
 export async function resolveTenantId(): Promise<string> {

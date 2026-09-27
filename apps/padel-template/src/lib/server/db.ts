@@ -30,7 +30,7 @@ import { Pool, type PoolConfig, type QueryResultRow } from "pg";
  * POR QUE UNA TRANSACCION POR CONSULTA
  * `set local role` y `set_config(..., true)` son de alcance TRANSACCIONAL. Sin una
  * transaccion que los enclose, un `role authenticated` de una consulta se leeria en la
- * siguiente por la misma conexion del pool, y la consulta que unknowingly correria como
+ * siguiente por la misma conexion del pool, y la consulta que correria sin querer como
  * superusuario seria la siguiente, no la que se acaba de escribir. El pool hace que las
  * conexiones se reutilicen justo cuando nadie lo esta mirando.
  */

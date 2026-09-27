@@ -119,7 +119,7 @@ describe("T5b: los bloques quitan huecos", () => {
   });
 
   it("un bloque parcial se come el slot entero, no lo parte", () => {
-    // 10:00-10:30 toca el slot 09:30-11:00.partirlo en 09:30-10:00 daria un hueco de
+    // 10:00-10:30 toca el slot 09:30-11:00. Partirlo en 09:30-10:00 daria un hueco de
     // 30 minutos que no es un `defaultDurationMin` y que el motor de precios no sabe
     // cuanto cobrar. Se quita el slot entero.
     const result = computeAvailability(
@@ -159,7 +159,7 @@ describe("T5b: los bloques quitan huecos", () => {
   });
 });
 
-describe("T5b: lo que hace con basura en vez de spreading", () => {
+describe("T5b: lo que hace con datos que no tienen sentido", () => {
   it("una duracion de 0 falla en vez de colgarse en bucle infinito", () => {
     // El fallo clasico de un `while (cursor < end) cursor += duracion`. Con `duracion = 0`
     // el cursor no avanza nunca.

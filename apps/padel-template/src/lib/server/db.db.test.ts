@@ -23,7 +23,7 @@ import {
  *
  * Lo que estos tests protegen NO es "que la consulta funcione". Es que `tenantQuery` no
  * sea una puerta trasera: si por lo que sea acabara corriendo como superusuario, TODO lo
- * de arriba valdria y un endpoint leakearia el catalogo de otro club sin que nada
+ * de arriba valdria y un endpoint filtraria el catalogo de otro club sin que nada
  * fallara. Por eso el primero comprueba `current_user` y el ultimo que un tenant
  * inexistente no ve NADA en vez de ver el mundo entero.
  */
@@ -97,9 +97,9 @@ describe("T5a: la capa de servidor consulta con el rol del tenant", () => {
     const claims = JSON.parse(rows[0]?.claims ?? "{}") as Record<string, unknown>;
 
     expect(claims.tenant_id).toBe(TENANT_IDS.a);
-    // `sub` identifies a PERSON. Un visitante sin sesion no es nadie, y poner un `sub`
-    // inventado seria fabricar una identidad. Si algun dia hace falta, tiene que venir
-    // de la sesion real, no de aqui.
+    // `sub` identifica a UNA PERSONA. Un visitante sin sesion no es nadie, y poner un `sub`
+    // inventado seria fabricar una identidad. Si algun dia hace falta, tiene que venir de
+    // la sesion real, no de aqui.
     expect(claims.sub).toBeUndefined();
   });
 
