@@ -33,7 +33,8 @@ import { baseQuery } from "./db";
 let cached: ResolvedTenant | null = null;
 
 /**
- * Lo que hay que saber de la instancia para responder a cualquier endpoint.
+ * Lo que hay que saber de la instancia para responder a cualquier endpoint, y para pintar
+ * una pagina.
  *
  * `id` es el uuid del club, y `timezone` la zona con la que el club razona. No es un
  * detalle: la ventana de disponibilidad (8:00 a 22:00) es HORA DE PARED del club, mientras
@@ -41,12 +42,20 @@ let cached: ResolvedTenant | null = null;
  * un bloque cae dentro de la ventana, y con la zona mal puesta el cierre de un club de
  * Mallorca aparece a las 20:00 en invierno.
  *
+ * `name` esta aqui, y no en `tenant_branding`, porque `tenant_branding` NO TIENE columna de
+ * nombre: tiene colores, rutas de imagen, fuente y los dos datos de email. El nombre que ve
+ * el socio en la cabecera de la web esta en `tenants.name`. Se podria haber metido el nombre
+ * en `tenant_branding` por simetria con los colores, y habria sido un error: el nombre del
+ * club es su identidad, no su decorado, asi que va en la tabla del club. Ademas asi el
+ * nombre se lee con el mismo viaje que la zona, en vez de en una segunda consulta.
+ *
  * Viaja aqui y no se consulta en cada endpoint porque es la misma para toda la instancia: es
  * una propiedad del despliegue, no de la peticion.
  */
 export interface ResolvedTenant {
   readonly id: string;
   readonly timezone: string;
+  readonly name: string;
 }
 
 /**
@@ -77,8 +86,8 @@ export async function resolveTenant(): Promise<ResolvedTenant> {
     );
   }
 
-  const rows = await baseQuery<{ id: string; timezone: string }>(
-    `select id, timezone from public.tenants where slug = $1 limit 2`,
+  const rows = await baseQuery<{ id: string; timezone: string; name: string }>(
+    `select id, timezone, name from public.tenants where slug = $1 limit 2`,
     [slug],
   );
 
@@ -108,7 +117,7 @@ export async function resolveTenant(): Promise<ResolvedTenant> {
     );
   }
 
-  cached = { id: fila.id, timezone: fila.timezone };
+  cached = { id: fila.id, timezone: fila.timezone, name: fila.name };
   return cached;
 }
 

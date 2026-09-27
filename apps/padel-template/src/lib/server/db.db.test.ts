@@ -181,11 +181,15 @@ describe("T5a: el tenant sale de la variable de entorno de la instancia", () => 
     await expect(resolveTenantId()).resolves.toBe(TENANT_IDS.b);
   });
 
-  it("resuelve el id Y la zona horaria de esa misma fila", async () => {
+  it("resuelve el id, la zona horaria y el nombre de esa misma fila", async () => {
     // La zona se cambia en la fila A PROPOSITO, y no en un tenant nuevo, porque lo que se
     // prueba es que el valor viene de la BASE. Si el codigo devolviera la zona del club de
     // ejemplo, o una constante, este test lo diria. Con un tenant aparte solo se probaria
     // que devuelve algo.
+    //
+    // El nombre tambien viene de aqui y no de `tenant_branding`, porque esa tabla no tiene
+    // columna de nombre. Por eso el `toEqual` lleva las tres: si alguien "optimiza"
+    // sacando el nombre a la tabla de la marca, este test dice que ha roto el contrato.
     //
     // Se restaura en el `finally`, no despues: si la asercion falla, la fila se queda igual y
     // los ficheros que corran despues (todos los tests del monorepo comparten esta base)
@@ -202,6 +206,7 @@ describe("T5a: el tenant sale de la variable de entorno de la instancia", () => 
       await expect(resolveTenant()).resolves.toEqual({
         id: TENANT_IDS.b,
         timezone: "America/Mexico_City",
+        name: "Club B",
       });
     } finally {
       await withAdmin(async (db) => {

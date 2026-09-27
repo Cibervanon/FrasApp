@@ -32,6 +32,57 @@ const storagePath = z
   .max(512)
   .regex(/^[A-Za-z0-9/_.-]+$/, "Ruta de Storage: sin espacios ni esquema");
 
+/**
+ * `font_family`: una PILA de fuentes CSS, no texto libre.
+ *
+ * `tenant_branding.font_family` no tiene `check` en la migracion, asi que la base acepta
+ * cualquier texto, y antes de T6 el esquema solo ponia un tope de 80 caracteres. T6c es el
+ * primer consumidor del valor (lo aplica al estilo de la pagina), y con un `z.string()` un
+ * `Inter; } body { display: none` cabe de sobra en 80 caracteres.
+ *
+ * Son DOS reglas, y hacen falta las dos. La regex quita los caracteres que tienen SINTAXIS
+ * de CSS: `;` cierra una declaracion, `{` y `}` abren y cierran un bloque, `:` y `(` abren
+ * una funcion, `/` y `*` abren un comentario, y la barra invertida escapa. Con eso el
+ * valor no puede dejar de ser un nombre de fuente por mas que se intente.
+ *
+ * La segunda regla son las comillas, y existe porque la primera se quedaba corta: un
+ * `Inter'` con la comilla sin cerrar pasa una lista de caracteres permitidos, y no es un
+ * nombre de fuente. Las comillas son necesarias de verdad (`'Helvetica Neue'` es un nombre
+ * legitimo y sin comillas seria dos fuentes), asi que no se quitan: se exigen
+ * EMPAREJADAS y del mismo tipo. Con eso un valor con comillas es siempre un nombre citado
+ * bien cerrado, que es la unica forma en que un gestor puede usarlas.
+ *
+ * Lo que hace seguro el conjunto, ademas, es COMO se aplica: por el objeto `style` de
+ * React, o sea por CSSOM, donde el navegador asigna una propiedad y no parsea una cadena de
+ * declaraciones. Estas dos reglas son la segunda linea, para el dia en que alguien escriba
+ * esto dentro de un `<style>` concatenando strings.
+ */
+function comillasEquilibradas(valor: string): boolean {
+  let abierta: "'" | '"' | null = null;
+  for (const caracter of valor) {
+    if (caracter === "'" || caracter === '"') {
+      // Una comilla del otro tipo dentro de una cita es texto, no sintaxis: en
+      // `'Helvetica's'` el nombre es valido. Se acepta y se cuenta como contenido.
+      if (abierta === null) abierta = caracter;
+      else if (abierta === caracter) abierta = null;
+      continue;
+    }
+    // Cualquier cosa que no sea letra, digito, separador o el guion de un identificador
+    // dentro de la cita, se deja para la regex de la regla 1.
+  }
+  return abierta === null;
+}
+
+const fontFamily = z
+  .string()
+  .min(1)
+  .max(80)
+  .regex(
+    /^[A-Za-z0-9 ,'"_-]+$/,
+    "Pila de fuentes CSS: solo letras, digitos, espacios, comas, guiones y comillas",
+  )
+  .refine(comillasEquilibradas, "Las comillas de un nombre de fuente tienen que cerrarse");
+
 /** Espejo de `tenant_branding`. */
 export const brandingSchema = z.object({
   primary_color: hexColor,
@@ -39,7 +90,7 @@ export const brandingSchema = z.object({
   logo_path: storagePath.nullable(),
   favicon_path: storagePath.nullable(),
   hero_image_path: storagePath.nullable(),
-  font_family: z.string().min(1).max(80),
+  font_family: fontFamily,
   /** Nombre que ve el socio como remitente. El club no configura SMTP (OQ-10). */
   email_from_name: z.string().min(1).max(60),
   email_reply_to: z.string().email(),
