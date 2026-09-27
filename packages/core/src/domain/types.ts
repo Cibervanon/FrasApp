@@ -358,3 +358,22 @@ export interface RefundQuote {
   /** Etiqueta del tramo aplicado, para mostrarla al socio. */
   readonly label: string | null;
 }
+
+/**
+ * Entrada del motor de reembolso (T8).
+ *
+ * OBJETO y no tres parametros posicionales: `priceCents` y `hoursBefore` son dos
+ * `number` seguidos, y con tres posicionales el orden se confunde en cada llamada.
+ * `resolvePrice` usa el mismo patron con `PricingInput`.
+ *
+ * `policy` son los tramos de `tenant_content['cancellation_policy']`, ya validados por
+ * `validateCancellationPolicy` (T2). El motor NO los lee de la base: es puro, y quien
+ * llama (T14b) trae los tramos consigo.
+ */
+export interface RefundInput {
+  /** Precio de la reserva, centimos IVA incluido (OQ-6). Snapshot del booking. */
+  readonly priceCents: number;
+  /** Horas de antelacion con las que se cancela: `(starts_at - ahora) / 3.600.000`. */
+  readonly hoursBefore: number;
+  readonly policy: CancellationPolicy;
+}
