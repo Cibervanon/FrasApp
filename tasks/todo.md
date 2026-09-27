@@ -255,7 +255,7 @@ branding distinto en paralelo
 ## Fase 2: Logica de negocio pura
 
 ### [x] T7: `resolvePrice` con TDD `[TDD]`
-**Hecho:** implementación completa, 135 tests, cobertura 100 %, `pnpm verify` verde. Pasa a T8.
+**Hecho:** implementación completa, 135 tests, cobertura 100 %, `pnpm verify` verde. Pasa a T8.
 **Spec:** secciones 4.3, 4.4, 7.3, 10
 
 **Descripcion:** Motor de precio dinamico como funcion **pura** en `packages/core`. Recibe
@@ -311,7 +311,7 @@ Devuelve tambien `tierHoursBefore` y `percentApplied` para auditarlo.
 
 ## Fase 3: Reservas y pago
 
-### [ ] T9: Migracion `bookings` con EXCLUDE y limpieza perezosa `[TDD]` `[SEG]`
+### [x] T9: Migracion `bookings` con EXCLUDE y limpieza perezosa `[TDD]` `[SEG]`
 **Spec:** secciones 4.4, 4.4.1, 7.4
 
 **Descripcion:** La tabla critica. `btree_gist`, `EXCLUDE` por `(tenant_id, court_id,
