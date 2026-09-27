@@ -923,3 +923,74 @@ Regla: **antes de envolver un array en otro array para que un driver lo entienda
 los parametros en la sentencia.** El doble array es un bug esperando a que alguien lo
 simplifique.
 
+
+## Un identificador mal desestructurado no da error: da un 404 que parece correcto (T5d)
+
+`resolveTenant()` devuelve `{ id, timezone }`. En la ruta se escribio `{ tenantId, timezone }`.
+TypeScript marca `tenantId` como error, pero mientras no se compilo, lo que paso en la base fue
+esto: `tenantId` vale `undefined`, `tenantQuery` lo mete en los claims, y `JSON.stringify` se
+come las claves `undefined`. Los claims quedan sin `tenant_id`, `current_tenant_id()` es null,
+la RLS no filtra, no deja ver, y la consulta de la pista no devuelve filas.
+
+El sintoma es el peor posible: **todo 404**. Los tres tests de 404 cross-tenant pasaban, porque
+tambien daba 404, y un 404 general "demuestra" que el aislamiento funciona. Los que de verdad
+fallaban eran los de las pistas propias, y su fallo (404 donde se esperaba 200) se lee como un
+problema de fixtures si no se sabe de donde sale.
+
+Lo pillo `pnpm typecheck`, no un test, y solo porque T5d no se commitea sin el `pnpm verify`
+entero. Un test mas, el de "no dice NUNCA 403", habria pasado en los dos estados.
+
+Regla: **un 404 que se repite en todas las peticiones no es un problema de RLS, es un
+identificador que llego `undefined`.** Cuando la RLS "filtra de mas", la primera pregunta no es
+si las politicas estan bien, es que claims estan llegando. Y en general: un `undefined` que se
+serializa a JSON desaparece en silencio; el sitio donde se nota es donde se lee, que es un
+lugar al final de un pipeline y con pinta de estar bien.
+
+## Un test que no inserta lo que su comentario describe no prueba nada (T5d)
+
+El caso de la zona horaria de `America/Mexico_City` decia, en el comentario: "un bloque de
+13:00 a 14:00 UTC son las 07:00 locales, antes de abrir, no quita nada, asi que siguen siendo 9
+slots". El test no insertaba ese bloque. Pasaba, y no probaba: solo comprobaba que la rejilla
+existe, que ya hacen los tres primeros tests de otra seccion.
+
+Con el bloque insertado, el test discrimina de verdad. Si la ruta usase la zona de Madrid en
+vez de la del tenant, las 13:00 UTC serian las 15:00 y el bloque se llevaria el slot de las
+15:30 (que va de 15:30 a 17:00 y se solapa con 15:00-16:00), y serian 8 slots, no 9. El
+comentario pasaba a ser la especificacion del fallo que se quiere detectar.
+
+Regla: **el comentario de un test es la especificacion de lo que tiene que pasar. Si el
+comentario describe un dato que el codigo no mete, el test esta midiendo otra cosa.** Al
+escribir el caso hay que contar que filas existen antes de la llamada; si el resultado esperado
+sigue valiendo sin el dato que el comentario nombra, el caso sobra o falta el `insert`.
+
+## Los bloques que cruzan un dia se recortan en la ruta, no en el motor (T5d)
+
+`court_blocks` guarda `timestamptz` (UTC) y la ventana de 8:00 a 22:00 es hora de pared del
+club. El `select` trae `starts_at at time zone $2` ya convertido a hora local, y ahi se
+recortan al dia pedido: `computeAvailability` lanza un error si algun rango no cae en el dia,
+y con razon, porque un motor que acepta un rango de ayer produciria horarios que no existen.
+
+Un bloque que empieza ayer a las 22:00 y acaba hoy a las 02:00 tiene que entrar como
+`00:00-02:00`, no entero. Con el recorte, no toca ningun slot de 8:00 a 22:00 y la respuesta es
+la rejilla completa; sin el, o el motor peta o, si se relajara la guarda, devolveria una
+disponibilidad de un dia mezclada con la de otro.
+
+Regla: **el recorte de un rango temporal a la ventana que se pregunta es del_endpoint, no del
+motor.** El motor responde sobre un dia y no deberia saber que existen dias vecinos.
+
+## `tenants` no tiene RLS, y su cabecera de migracion dice lo contrario (T5d)
+
+`20260926000100_tenancy.sql` declara en la cabecera que todas las tablas con `tenant_id` llevan
+RLS, y lo cumple en `tenant_branding`, `tenant_features` y `tenant_content`. `tenants` no lleva
+`tenant_id` (es la tabla de tenants), asi que la regla no le aplica de forma literal, pero la
+tabla esta expuesta: sin `enable row level security` es legible por `anon` y por
+`authenticated`, y contiene `stripe_account_id`.
+
+No es un secreto (un account id de Stripe Connect no es una credencial) y por eso
+`baseQuery`, que es por donde se resuelve el tenant, sigue usandola. Pero la migracion dice
+una cosa y la base hace otra, que es como empiezan los RLS rotos. T5d no lo arregla porque no
+es su tarea y hacerlo a mitad seria cambiar la migracion aplicada; queda anotado aqui para que
+se decida antes de que haya una tabla de datos de club que si importen.
+
+Regla: **una cabecera de migracion que afirma una invariante es un test que no se ejecuta.**
+Si la invariante no esta cubierta por ningun test de `pg_policies`, es decoracion.

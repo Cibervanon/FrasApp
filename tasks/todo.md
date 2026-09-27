@@ -170,7 +170,7 @@ un test pareciera parte del despliegue.
 
 ---
 
-### [ ] T5: Endpoints de pistas y disponibilidad v1 (sin precios)
+### [x] T5: Endpoints de pistas y disponibilidad v1 (sin precios)
 **Spec:** seccion 5.1, 7.2
 
 **Descripcion:** `GET /api/courts` y `GET /api/availability?court_id&date`. Slots de 90 min
@@ -178,21 +178,24 @@ no solapados, con `court_blocks` aplicado como overlay. **Sin precios todavia**:
 no existe.
 
 **Criterios de aceptacion:**
-- [ ] Devuelve slots de 90 min no solapados entre las 8:00 y las 22:00
-- [ ] Un `court_block` en una franja oculta esos slots del dia
-- [ ] `court_id` de un tenant ajeno devuelve 404, no 403 (no se confirma su existencia)
+- [x] Devuelve slots de 90 min no solapados entre las 8:00 y las 22:00
+- [x] Un `court_block` en una franja oculta esos slots del dia
+- [x] `court_id` de un tenant ajeno devuelve 404, no 403 (no se confirma su existencia)
 - [x] El `tenant_id` se resuelve en servidor desde el host. Un `tenant_id` en la query se
       ignora
 
-**Progreso:** partida en cuatro bloques, porque T6 consume esta API y conviene no dejarla a
-medio hacer. Cerradas **T5a** (`tenant.ts` + `db.ts`, la capa de RLS real, commit `3984e17`),
-**T5b** (`computeAvailability` pura en `core`, 20 tests, commit `bf64269`) y **T5c**
-(`GET /api/courts`, 17 tests DB contra Postgres real, `TENANT_SLUG` documentada en
-`.env.example`). Queda **T5d**: `GET /api/availability?court_id&date`, que es la que aporta
-los tres criterios sin marcar. El de `tenant_id` ya esta comprobado por T5c, contra un
-`tenant_id` de un club que existe y tiene pistas de verdad, y la respuesta es identica con y
-sin el. El endpoint recibe la `Request` y no la lee; con la firma sin parametros, ese test
-seria vacuo.
+**Progreso:** cerrada, partida en cuatro bloques porque T6 consume esta API y conviene no
+dejarla a medio hacer. **T5a** (`tenant.ts` + `db.ts`, la capa de RLS real, commit
+`3984e17`), **T5b** (`computeAvailability` pura en `core`, 20 tests, commit `bf64269`),
+**T5c** (`GET /api/courts`, 17 tests DB, commit `9fe8ae2`) y **T5d**
+(`GET /api/availability?court_id&date`, 27 tests DB). Total 60 tests unit y 113 tests DB
+contra Postgres real, `pnpm verify` en verde y las dos rutas marcadas como dinamicas
+(server-rendered on demand) en el build.
+
+El criterio de `tenant_id` estaba comprobado desde T5c, contra un `tenant_id` de un club que
+existe y tiene pistas de verdad, y la respuesta es identica con y sin el. T5d lo repite
+porque aqui el handler SI lee la query: si leyera el `tenant_id`, la pista del otro club se
+encontraria y el endpoint devolveria el horario de un club entero.
 
 **Verificacion:** tests de endpoint · `curl` con un `tenant_id` inventado en la query
 

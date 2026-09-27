@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { clearTenantCache, resolveTenantId } from "./tenant";
+import { clearTenantCache, resolveTenant, resolveTenantId } from "./tenant";
 import { baseQuery, tenantQuery } from "./db";
 import {
   prepareDatabase,
@@ -179,6 +179,49 @@ describe("T5a: el tenant sale de la variable de entorno de la instancia", () => 
 
     clearTenantCache();
     await expect(resolveTenantId()).resolves.toBe(TENANT_IDS.b);
+  });
+
+  it("resuelve el id Y la zona horaria de esa misma fila", async () => {
+    // La zona se cambia en la fila A PROPOSITO, y no en un tenant nuevo, porque lo que se
+    // prueba es que el valor viene de la BASE. Si el codigo devolviera la zona del club de
+    // ejemplo, o una constante, este test lo diria. Con un tenant aparte solo se probaria
+    // que devuelve algo.
+    //
+    // Se restaura en el `finally`, no despues: si la asercion falla, la fila se queda igual y
+    // los ficheros que corran despues (todos los tests del monorepo comparten esta base)
+    // no se encuentran un club de Mexico sin haberlo pedido.
+    await withAdmin(async (db) => {
+      await db.query(`update public.tenants set timezone = $2 where id = $1`, [
+        TENANT_IDS.b,
+        "America/Mexico_City",
+      ]);
+    });
+    process.env["TENANT_SLUG"] = "club-b";
+    clearTenantCache();
+    try {
+      await expect(resolveTenant()).resolves.toEqual({
+        id: TENANT_IDS.b,
+        timezone: "America/Mexico_City",
+      });
+    } finally {
+      await withAdmin(async (db) => {
+        await db.query(`update public.tenants set timezone = $2 where id = $1`, [
+          TENANT_IDS.b,
+          "Europe/Madrid",
+        ]);
+      });
+      clearTenantCache();
+    }
+  });
+
+  it("resolveTenantId es un atajo de resolveTenant, no una segunda consulta", async () => {
+    process.env["TENANT_SLUG"] = "club-a";
+    clearTenantCache();
+    // La cache es la misma: `resolveTenantId` no puede dar un id distinto del que da
+    // `resolveTenant` para el mismo slug. Si algún dia se desincronizaran, seria porque uno
+    // de los dos deja de usar la cache, y este test lo diria.
+    const completo = await resolveTenant();
+    await expect(resolveTenantId()).resolves.toBe(completo.id);
   });
 
   it("sin TENANT_SLUG falla con un mensaje que dice que hacer", async () => {

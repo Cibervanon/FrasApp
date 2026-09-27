@@ -74,10 +74,13 @@ Phase 4 (BUILD)
       `scripts/check-encoding.mjs` al principio de `verify`
 - [x] **T4 completa**: `courts` + `court_blocks` con RLS y `FORCE`, FK compuesta que
       impide el bloqueo cross-tenant, 29 tests nuevos con control negativo
+- [x] **T5 completa**: T5a `tenant.ts`+`db.ts` (RLS real), T5b `computeAvailability` pura,
+      T5c `GET /api/courts`, T5d `GET /api/availability?court_id&date`. 60 tests unit,
+      113 tests DB, `pnpm verify` al completo
 - **Status:** in_progress
 
-**Tarea actual: T5** (endpoints `GET /api/courts` y `GET /api/availability`, sin precios),
-partida en cuatro bloques porque T6 (pantallas) va a consumir la API que salga de aqui y
+**Tarea siguiente: T6** (pantallas de pistas y disponibilidad, que consumen la API de T5).
+T5 queda cerrada en cuatro bloques porque T6 va a consumir la API que salga de aqui y
 conviene no tenerla a medio hacer:
 
 | bloque | que es | por que separado | estado |
@@ -85,7 +88,7 @@ conviene no tenerla a medio hacer:
 | **T5a** | `tenant.ts` (resuelve el tenant) + `db.ts` (consulta con rol `authenticated` y claims de servidor) | Es la base de la que dependen los otros tres. Y es donde vive la decision de seguridad | **cerrada** (`3984e17`), 11 tests DB |
 | **T5b** | `computeAvailability` en `packages/core`, pura | Logica pura sin base de datos. Se puede probar entera sin Postgres, y un fallo dice QUE HORA esta mal en vez de "el endpoint da 500" | **cerrada**, 20 tests |
 | **T5c** | `GET /api/courts` | El endpoint mas simple: valida que T5a funciona contra algo real | **cerrada**, 17 tests DB |
-| **T5d** | `GET /api/availability?court_id&date` | El que tiene la logica de bloques y el 404 cross-tenant | pendiente |
+| **T5d** | `GET /api/availability?court_id&date` | El que tiene la logica de bloques y el 404 cross-tenant | **cerrada**, 27 tests DB |
 
 **Sobre el "100% de cobertura" de T5b:** el plan de T5 lo pedia, y al cerrarlo hay que
 decir la verdad sobre lo que se ha comprobado. Todas las ramas de `availability.ts` las
@@ -116,6 +119,32 @@ costado un rato:
    `/api/courts` como dinamica (server-rendered on demand) y no como estatica
    prerenderizada. Es la prueba de que la ruta no se genera en compilacion, donde no hay
    `TENANT_SLUG` ni base de datos.
+
+**T5d cerrada**: 27 tests DB contra Postgres real, y dos correcciones de fondo que solo se
+pudieron ver porque los tests de la zona horaria existen de verdad.
+
+1. **La conversion a hora de pared la hace Postgres, y el recorte de bloques es de la
+   ruta.** `court_blocks` guarda `timestamptz`, que es UTC, y la ventana de 8:00 a 22:00
+   es hora de pared del club. El `select` trae `starts_at at time zone $2` ya convertido, y
+   ahi se recortan los bloques que tocan el dia pedido: `computeAvailability` rechaza con un
+   error cualquier rango cuyo instante no sea de ese dia, asi que un bloque del dia anterior
+   que sigue vivo tiene que entrar recortado a las 00:00, no entero. Los dos dias de cambio de
+   hora (2026-03-29 y 2026-10-25) estan fijados a proposito: son los unicos dias en los que
+   un desfase fijo pasaria los tests.
+2. **Un `tenantId` mal desestructurado devuelve 404 en todas partes, y parece que el
+   aislamiento funciona.** `resolveTenant()` devuelve `{ id, timezone }`. Escribiendo
+   `{ tenantId, timezone }` sale `undefined`, y como `JSON.stringify` se come las claves
+   `undefined`, los claims se quedan sin `tenant_id`: `current_tenant_id()` es null, la RLS no
+   filtra, no deja ver, y TODAS las peticiones devuelven 404, incluidas las de las pistas
+   propias. Los tres tests de 404 cross-tenant pasaban, por la razon equivocada. Lo pillo el
+   typecheck, no un test: por eso `pnpm typecheck` va antes que `test` en `pnpm verify`, y por
+   eso no se commitea sin el verde entero.
+3. **Un test que no inserta lo que su comentario describe no prueba nada.** El caso de
+   `America/Mexico_City` decia "un bloque de 13:00 a 14:00 UTC son las 07:00 locales, antes de
+   abrir, no quita nada", y no insertaba ese bloque. Con el bloque insertado, el test distingue
+   de verdad: si la ruta usase la zona de Madrid serian las 15:00 y se llevarian el slot de
+   las 15:30. Sin el, solo comprobaba que la rejilla existe, que ya hacen los tres tests
+   primeros.
 
 **Decisiones tomadas por el usuario antes de empezar T5** (ver `findings.md`):
 1. **Un endpoint publico entra en la RLS como rol `authenticated` con un JWT de servidor

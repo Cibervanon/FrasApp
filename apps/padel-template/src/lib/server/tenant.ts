@@ -30,17 +30,42 @@ import { baseQuery } from "./db";
  * en caliente y no algo que hagamos por request.
  */
 
-let cached: string | null = null;
+let cached: ResolvedTenant | null = null;
 
 /**
- * Resuelve el `TENANT_SLUG` de la instancia al `uuid` del tenant.
+ * Lo que hay que saber de la instancia para responder a cualquier endpoint.
+ *
+ * `id` es el uuid del club, y `timezone` la zona con la que el club razona. No es un
+ * detalle: la ventana de disponibilidad (8:00 a 22:00) es HORA DE PARED del club, mientras
+ * que las filas de `court_blocks` son `timestamptz` en UTC. Sin la zona no se puede saber si
+ * un bloque cae dentro de la ventana, y con la zona mal puesta el cierre de un club de
+ * Mallorca aparece a las 20:00 en invierno.
+ *
+ * Viaja aqui y no se consulta en cada endpoint porque es la misma para toda la instancia: es
+ * una propiedad del despliegue, no de la peticion.
+ */
+export interface ResolvedTenant {
+  readonly id: string;
+  readonly timezone: string;
+}
+
+/**
+ * Resuelve el `TENANT_SLUG` de la instancia al `uuid` del tenant y su zona horaria.
  *
  * Falla ruidosamente y con un mensaje accionable si la variable falta, si el slug no esta
  * en la base, o si hay mas de una fila (que no puede pasar: `slug` es `unique`, pero el
  * `limit 2` esta para que un `unique` que alguien quite un dia no se convierta en un
  * "devuelvo el primero" silencioso).
+ *
+ * La zona se lee de la MISMA fila y con `baseQuery`, no con la conexion del tenant, por un
+ * motivo que es un huevo y una gallina: para entrar con la conexion del tenant hay que saber
+ * cual es el tenant, y eso es justo lo que se esta preguntando. Y no es que se pueda titular
+ * con el `slug` y ya, porque `public.tenants` no tiene RLS (ver `findings.md`): un
+ * `tenantQuery` aqui devolveria las filas de todos los clubes de la instancia. El aislamiento
+ * lo da el `where slug = $1` contra un `unique`, que es lo unico que se puede exigir antes de
+ * saber quien pregunta.
  */
-export async function resolveTenantId(): Promise<string> {
+export async function resolveTenant(): Promise<ResolvedTenant> {
   if (cached !== null) return cached;
 
   const slug = process.env["TENANT_SLUG"];
@@ -52,8 +77,8 @@ export async function resolveTenantId(): Promise<string> {
     );
   }
 
-  const rows = await baseQuery<{ id: string }>(
-    `select id from public.tenants where slug = $1 limit 2`,
+  const rows = await baseQuery<{ id: string; timezone: string }>(
+    `select id, timezone from public.tenants where slug = $1 limit 2`,
     [slug],
   );
 
@@ -72,19 +97,30 @@ export async function resolveTenantId(): Promise<string> {
     );
   }
 
-  const id = rows[0]?.id;
-  if (id === undefined) {
-    // inalcanzable por el `length` de arriba, pero `rows[0]?.id` es `string | undefined`
-    // y esta funcion promete `string`. Sin esto, un no-me-vaya-a-pasar se cuela en el
-    // tipo de retorno y el endpoint acaba con un `undefined` donde esperaba un tenant.
+  const fila = rows[0];
+  if (fila === undefined) {
+    // inalcanzable por el `length` de arriba, pero `rows[0]` es `T | undefined` y esta
+    // funcion promete un tenant entero. Sin esto, un no-me-vaya-a-pasar se cuela en el
+    // tipo de retorno y el endpoint acaba con un `undefined` donde esperaba un uuid.
     throw new Error(
       `La consulta del slug '${slug}' devolvio una fila sin 'id'. La tabla ` +
         `public.tenants esta danificada de una forma que no deberia existir.`,
     );
   }
 
-  cached = id;
-  return id;
+  cached = { id: fila.id, timezone: fila.timezone };
+  return cached;
+}
+
+/**
+ * Solo el `uuid`, para los endpoints que no razonan en horas.
+ *
+ * Un atajo sobre `resolveTenant`, no una segunda consulta: comparte la cache, y con ella el
+ * viaje a la base. `/api/courts` no tiene horas, asi que pedirle la zona seria tirarla
+ * fuera; y la forma de tirarla es este `id`, que es lo que un endpoint sin reloj necesita.
+ */
+export async function resolveTenantId(): Promise<string> {
+  return (await resolveTenant()).id;
 }
 
 /**
