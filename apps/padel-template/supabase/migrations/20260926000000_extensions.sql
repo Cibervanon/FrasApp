@@ -1,0 +1,26 @@
+-- =============================================================================
+-- 000: Extensiones
+--
+-- Va antes que la migracion 001 a proposito: `btree_gist` lo necesita el
+-- `EXCLUDE` de `bookings` (seccion 4.4.1 de la spec) y el shim de `auth` ya esta
+-- aplicado antes que las migraciones. El nombre `20260926000000` lo coloca primero
+-- porque `db-reset.mjs` ordena los ficheros de forma lexicografica.
+--
+-- POR QUE ESTA AQUI Y NO EN EL HARNESS DE TEST
+-- Estaba en `db-harness.ts`, que hacia `create extension if not exists btree_gist`
+-- al preparar la base. Eso era un error de propiedad, y ademas hacia que el test
+-- `requireExtension('btree_gist')` fuera TAUTOLOGICO: como la acababa de crear, no
+-- podia fallar nunca, y un test que no puede fallar no prueba nada.
+--
+-- Quien declara una extension del esquema es la migracion. Asi:
+--   - `pnpm db:reset` deja la base en el mismo estado que tendra Supabase, sin
+--     depender de que nadie haya ejecutado antes los tests.
+--   - el harness se limita a COMPROBAR que esta, y si falta dice que corra
+--     `pnpm db:reset`, en vez de ponyear un `create` que tapa el problema.
+--   - desplegar en un entorno nuevo no necesita un paso extra.
+--
+-- En Supabase esta extension ya viene activa en el proyecto, asi que el
+-- `if not exists` no hace nada y el despliegue no falla.
+-- =============================================================================
+
+create extension if not exists btree_gist;

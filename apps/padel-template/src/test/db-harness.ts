@@ -162,30 +162,40 @@ export async function withClaims<T>(
 }
 
 /**
- * Comprueba que la extension `btree_gist` esta creada, y la crea si falta.
+ * Comprueba que la extension `name` esta instalada, y falla si no lo esta.
  *
- * POR QUE IMPORTA AHORA Y NO EN T4
- * `btree_gist` es lo que hace posible `EXCLUDE` sobre un `tstzrange` junto a un
- * `uuid`: sin el, la restriccion de solapes de reservas de T4 NO SE PUEDE EXPRESAR, y
- * se descubre al escribir la migracion, que es tarde. Aqui falla al arrancar de la
- * suite, que es donde se puede arreglar.
+ * NO LA CREA. La crea la migracion `20260926000000_extensions.sql`, porque una
+ * extension del esquema es de la migracion y no del arnes de test. Cuando esto hacia
+ * `create extension if not exists`, el `requireExtension('btree_gist')` de la suite era
+ * tautologico: no podia fallar nunca, porque la acababa de crear. Un test que no puede
+ * fallar no prueba nada.
  *
- * Lanza con el mensaje REAL de Postgres, no con un "extensión no encontrada" propio:
- * si el fallo es que el postgres de Windows viene sin los ficheros de contrib, el
- * mensaje de Postgres dice exactamente cual falta.
+ * Ademas, que el arnes creara la extension hacia que `pnpm test:db` bothersa a mas
+ * estado del que la migracion declara, y el estado de la base dependia de si habias
+ * corrido los tests antes.
+ *
+ * El mensaje incluye el de Postgres, no uno propio, porque el fallo real mas probable es
+ * que el PostgreSQL de Windows venga sin los ficheros de contrib, y ahi el mensaje de
+ * Postgres dice exactamente que falta.
  */
 export async function requireExtension(name: string): Promise<void> {
   await withAdmin(async (db) => {
-    try {
-      await db.query(`create extension if not exists ${name}`);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+    const result = await db.query<{ installed_version: string | null }>(
+      `select extversion as installed_version
+         from pg_extension
+        where extname = $1`,
+      [name],
+    );
+    const version = result.rows[0]?.installed_version;
+    if (!version) {
       throw new Error(
-        `No se pudo crear la extension '${name}'.\n` +
-          `Postgres dice: ${detail}\n\n` +
-          `En Windows, las extensiones de contrib van aparte en ` +
-          `"C:\\Program Files\\PostgreSQL\\17\\lib\\". Si el fichero no esta, la ` +
-          `instalacion de PostgreSQL vino sin contrib y hay que reinstalarla marcando ` +
+        `La extension '${name}' no esta instalada.\n` +
+          `La instala la migracion 20260926000000_extensions.sql, asi que casi seguro ` +
+          `falta aplicar las migraciones: ejecuta \`pnpm db:reset\` y vuelve a lanzar ` +
+          `los tests.\n` +
+          `Si la migracion esta aplicada y el error sigue, el PostgreSQL de Windows vino ` +
+          `sin los ficheros de contrib. Van aparte en ` +
+          `"C:\\Program Files\\PostgreSQL\\17\\lib\\", y hay que reinstalar marcando ` +
           `"command line tools" y "contrib".`,
       );
     }

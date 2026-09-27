@@ -196,9 +196,15 @@ describe("harness: comprobaciones previas fallan ruidosamente", () => {
     );
   });
 
-  it("da un error accionable si la extension no se puede crear", async () => {
+  it("falla si la extension no esta, en vez de crearla por los pelos", async () => {
+    // Este test es el que hace que `requireExtension` valga algo. Si el harness volviera
+    // a hacer `create extension if not exists`, esta comprobacion pasaria siempre y el
+    // helper habria dejado de detectar un `pnpm db:reset` que falte.
     await expect(requireExtension("extension_que_no_existe")).rejects.toThrow(
-      /Postgres dice/,
+      /no esta instalada/,
+    );
+    await expect(requireExtension("extension_que_no_existe")).rejects.toThrow(
+      /pnpm db:reset/,
     );
   });
 
@@ -215,10 +221,13 @@ describe("harness: comprobaciones previas fallan ruidosamente", () => {
   });
 });
 
-describe("harness: la extension que necesita T4 esta disponible", () => {
+describe("harness: la extension que necesita T5 esta disponible", () => {
   it("btree_gist esta creada, porque EXCLUDE la necesita para tstzrange", async () => {
-    // Si esto falla, la migracion de T4 NO PUEDE escribir la restriccion de solapes
-    // y hay que resolverlo aqui, no a mitad de T4.
+    // Si esto falla, la migracion de `bookings` NO PUEDE escribir la restriccion de
+    // solapes y hay que resolverlo aqui, no a mitad de T5.
+    //
+    // Quien la crea es la migracion `20260926000000_extensions.sql`, no este harness.
+    // Por eso este test puede fallar de verdad, y antes podia no.
     const rows = await withAdmin(async (db) => {
       const result = await db.query<{ extname: string; extversion: string }>(
         `select extname, extversion from pg_extension where extname = 'btree_gist'`,
