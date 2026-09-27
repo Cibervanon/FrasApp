@@ -8,12 +8,36 @@
  * la ruta del fichero que los contiene.
  *
  * La app importa Tailwind en su propio `globals.css` y luego estos tokens.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE HAY UN VALOR AQUI SI LA REGLA 1 DICE QUE NO HAY COLORES
+ *
+ * Porque hay una diferencia entre "un color" y "la ausencia de color". Un club
+ * sin fila en `tenant_branding` tiene que verse de ALGUNA forma, y si el respaldo
+ * desaparece sin mas, `var(--brand-primary)` no vale nada: el fondo se queda
+ * transparente y el texto de color de marca se cae al color heredado. Eso no es
+ * una pantalla neutra, es una pantalla rota.
+ *
+ * Asi que el respaldo es un gris, y se escribe en `oklch()` y no en hex por dos
+ * razones, ambas comprobadas por test (`components.test.ts`):
+ *
+ * 1. El guard de marca de la app prohibe cualquier hex en lo que se renderiza,
+ *    asi que un color de club no puede colarse ni por descuido.
+ * 2. El test exige que el croma (`0`) sea EXACTAMENTE cero. Un gris de verdad
+ *    cumple; `oklch(0.4 0.12 250)`, que es un azul, no. Ese test convierte el
+ *    comentario "esto no es un color de marca" en algo que se puede comprobar en
+ *    lugar de algo que hay que creer.
+ *
+ * El valor `oklch(0.216 0 0)` es el mismo gris que el `neutral-800` de Tailwind,
+ * a proposito: el respaldo tiene que ser indistinguible del gris de la propia
+ * paleta, para que la pantalla sin marca se vea como la pantalla con marca
+ * apagada y no como una pantalla distinta.
  */
 :root {
-  /* Respaldo: el tenant los sobreescribe en runtime desde `tenant_branding`.
-     Regla 1: ningun color de marca hardcodeado como valor de verdad. */
-  --brand-primary: #1a4d8f;
-  --brand-accent: #e8a33d;
+  /* Respaldo neutro, sobreescrito en runtime desde `tenant_branding` cuando el
+     tenant tiene marca. Croma 0 obligatorio: ver el test de tokens. */
+  --brand-primary: oklch(0.216 0 0);
+  --brand-secondary: oklch(0.145 0 0);
 }
 
 @media (prefers-color-scheme: dark) {

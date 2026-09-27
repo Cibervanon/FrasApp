@@ -8,9 +8,15 @@ import type { CSSProperties, ReactNode } from "react";
  * limites de capas (T6) lo marca.
  */
 
+/**
+ * Los nombres de estos dos colores son los de la base de datos, no los que
+ * molarian mas. En `tenant_branding` la columna se llama `secondary_color`, y
+ * llamarla `accent` aqui obligaba a traducir en cada frontera; el nombre que no
+ * coincide con la columna es el que se equivoca primero y sin que nadie se entere.
+ */
 export interface BrandColors {
   readonly primary: string;
-  readonly accent: string;
+  readonly secondary: string;
 }
 
 /**
@@ -19,17 +25,27 @@ export interface BrandColors {
  */
 export type BrandVars = CSSProperties & {
   "--brand-primary": string;
-  "--brand-accent": string;
+  "--brand-secondary": string;
 };
 
 /**
  * Aplica los colores del tenant como variables CSS. Los componentes de abajo
  * las usan, en lugar de tener colores propios.
+ *
+ * Quien llama a esto es el servidor, una vez por pagina, en el elemento raiz. Los
+ * componentes NO lo llaman, y antes de este cambio `Card` si lo hacia, pasandose a si
+ * mismo `var(--brand-primary)` como valor de `--brand-primary`. Eso no era un
+ * pseudocodigo inocuo: una variable personalizada que se referencia a si misma es
+ * invalida en tiempo de calculo, y una propiedad personalizada invalida se resuelve
+ * como si no estuviera definida. En una pagina sin marca, el efecto era que `Card` se
+ * borraba a si misma las variables de su subarbol y todo lo que colgara de ahi se
+ * quedaba sin color. Un fallo que solo aparece cuando el tenant NO tiene branding, que
+ * es justo cuando nadie lo va a mirar.
  */
 export function brandVars(colors: BrandColors): BrandVars {
   return {
     "--brand-primary": colors.primary,
-    "--brand-accent": colors.accent,
+    "--brand-secondary": colors.secondary,
   };
 }
 
@@ -38,13 +54,16 @@ export interface CardProps {
   readonly children: ReactNode;
 }
 
-/** Tarjeta basica. Sin colores propios: usa las variables del tenant. */
+/**
+ * Tarjeta basica. Neutra a proposito: es el contenedor de contenido que usan todas las
+ * pantallas, y si llevara un tinte de marca, cada club veria las cajas de todo el club
+ * del color de su primary, que es exactamente el efecto "pasted from the club" que la
+ * regla 1 quiere evitar. La marca entra en los sitios que de verdad la piden (cabecera,
+ * enlaces primarios), no en el marco de todo lo demas.
+ */
 export function Card({ title, children }: CardProps) {
   return (
-    <section
-      className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm"
-      style={brandVars({ primary: "var(--brand-primary)", accent: "var(--brand-accent)" })}
-    >
+    <section className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
       <h2 className="mb-2 text-lg font-semibold text-neutral-900">{title}</h2>
       {children}
     </section>
