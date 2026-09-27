@@ -709,3 +709,49 @@ contra base de datos, un e2e contra un servidor, un lint sobre la salida de otro
 todo eso depende de algo que el hash no ve. Y `cache: false` no cuesta nada: 11 s de 56
 tests contra un motor de Postgres real es un precio razonable por no mentir.
 
+## Un endpoint publico no puede leer con politicas `to authenticated` (T5)
+
+La spec (5.1) declara `GET /api/courts` y `GET /api/availability` **publicas**. T4 habia
+escrito las 8 politicas `to authenticated`, que es lo correcto para un socio con sesion. El
+choque no se ve leyendo la spec ni el codigo: sale al intentar que un visitante sin sesion
+vea el catalogo.
+
+Comprobado con una sonda contra la base, no deducido:
+
+| rol | claims | filas de `courts` |
+|---|---|---|
+| `anon` | ninguna | **0** |
+| `authenticated` | sin `tenant_id` | **0** |
+| `authenticated` | con `tenant_id` | las suyas |
+
+`anon` si tiene `SELECT` sobre las dos tablas —los privilegios por defecto de Supabase— lo
+que pasa es que **no hay ninguna politica que le deje pasar**. `current_tenant_id()` lee
+`auth.jwt() ->> 'tenant_id'`; sin JWT eso es null, y `tenant_id = null` no es true nunca.
+Fail-closed, que es lo correcto. El efecto es que el catalogo del club salia vacio.
+
+**La decision, y por que no las otras dos.** Descartado `service_role`: se salta la RLS, y
+el aislamiento pasaria a depender de que cada consulta recuerde escribir
+`where tenant_id = ...`. Un filtro olvidado en un endpoint publico filtra el catalogo de
+otro club, que es exactamente la clase de fallo que T4 cerro con la FK compuesta. Que la
+base proteja sola, y no la memoria de quien escribe la query.
+
+Descartado `to anon` con una cabecera de tenant: obliga a que el servidor strippee cualquier
+copia que venga del cliente, y una limpieza de cabeceras mal hecha es una via de fuga. Es
+atacar la RLS desde el lado mas debil.
+
+Elegido: **el handler resuelve el tenant y consulta con el rol `authenticated` y un JWT que
+solo lleva `tenant_id`, sin identidad de usuario.** La RLS sigue siendo el unico punto de
+aislamiento, no hay politicas nuevas, y el visitante sin sesion y el socio con sesion pasan
+por las mismas 8 politicas. No es un rodeo: es que "publico" describe quien puede llamar, no
+que se salten las reglas.
+
+**Y el tenant viene de una variable de entorno, no de una tabla de hosts.** El modelo ya
+decidido es "instancia aislada por cliente", asi que una instancia es de un solo club y el
+tenant se fija al desplegar. Una tabla `tenant_hosts` seria maquinaria para un caso
+(shared-hosting) que ningun requisito pide, y ademas Pondria datos de routing en la base.
+
+**Lo que esto obliga a probar**, y es lo importante: que un `tenant_id` en la query o en el
+cuerpo **no** cambia el tenant de la consulta. Si el handler lo leyera de la peticion, todo
+lo de arriba valdria y el visitante veria el club que quisiera. Ese es el test que de verdad
+protege la decision, y va en T5d.
+

@@ -76,7 +76,33 @@ Phase 4 (BUILD)
       impide el bloqueo cross-tenant, 29 tests nuevos con control negativo
 - **Status:** in_progress
 
-**Tarea actual: T5** (endpoints `GET /api/courts` y `GET /api/availability`, sin precios).
+**Tarea actual: T5** (endpoints `GET /api/courts` y `GET /api/availability`, sin precios),
+partida en cuatro bloques porque T6 (pantallas) va a consumir la API que salga de aqui y
+conviene no tenerla a medio hacer:
+
+| bloque | que es | por que separado |
+|---|---|---|
+| **T5a** | `tenant.ts` (resuelve el tenant) + `db.ts` (consulta con rol `authenticated` y claims de servidor) | Es la base de la que dependen los otros tres. Y es donde vive la decision de seguridad |
+| **T5b** | `computeAvailability` en `packages/core`, pura | Logica pura con 100% de cobertura, sin base de datos. Se puede probar entera sin Postgres |
+| **T5c** | `GET /api/courts` | El endpoint mas simple: valida que T5a funciona contra algo real |
+| **T5d** | `GET /api/availability?court_id&date` | El que tiene la logica de bloques y el 404 cross-tenant |
+
+**Decisiones tomadas por el usuario antes de empezar T5** (ver `findings.md`):
+
+1. **Un endpoint publico entra en la RLS como rol `authenticated` con un JWT de servidor
+   que solo lleva `tenant_id`.** No como `service_role` (que se saltaria la RLS) ni con
+   politicas `to anon` (que abririan una via de falsificacion de cabecera). La RLS sigue
+   siendo el unico punto de aislamiento, y el visitante sin sesion y el socio pasan por
+   las mismas 8 politicas.
+2. **El tenant sale de una variable de entorno por instancia** (`TENANT_SLUG`), no de una
+   tabla de hosts. El modelo es "instancia aislada por cliente", asi que el tenant se fija
+   al desplegar. La BD local sigue teniendo 3 tenants para poder probar el aislamiento.
+
+**El problema que motivo la pregunta:** la spec declara `/api/courts` y
+`/api/availability` publicas, pero T4 escribio las 8 politicas `to authenticated`. Sin
+sesion no hay JWT, sin JWT `current_tenant_id()` es null, y la RLS devuelve 0 filas: el
+catalogo del club salia vacio. Comprobado con una sonda contra la base, no deducido.
+
 **T4 cerrada**: `courts` y `court_blocks` existen con RLS completa y `FORCE`, 8 politicas,
 29 tests nuevos, 56 de integracion en total. **T3 cerrada**: el harness de test de
 integracion contra Postgres real esta en `apps/padel-template/src/test/db-harness.ts`, con
