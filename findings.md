@@ -856,3 +856,70 @@ provider de cobertura que no era obvio antes: **`toMinute` es exactamente lo que
 de cobertura detecta y un test no.** Un 100% obligatorio obliga a decidir, a proposito, si
 esa funcion se borra o si se le escribe un test que no significa nada.
 
+## Un handler sin parametros hace vacuo el test de su propia garantia (T5c)
+
+`GET /api/courts` se escribio con `export async function GET(): Promise<Response>`, sin
+argumentos, porque el criterio 7.1 dice que un `tenant_id` en la query se ignora y la forma
+mas fuerte de cumplirlo es que el compilador no deje ni leerlo. El test lo llamaba con
+`GET(new Request(".../?tenant_id=<otro club>"))` y comparaba la respuesta con la de la
+peticion sin parametro.
+
+Dos tests, uno 500 falso y una firma que no compila. El `Expected 0 arguments` era lo
+*-menos* malo: el otro fallo era silencioso. Con la firma sin parametros, las dos llamadas
+del test son literalmente la misma funcion sin entrada, y "son iguales" no dice nada del
+endpoint. El test del criterio 7.1 estaba probando que una constante es igual a si misma.
+
+La firma ahora es `GET(_request: Request)`. La peticion llega, el test la manda con el
+`tenant_id` de un club que existe y tiene pistas de verdad, y la respuesta es identica
+campo a campo. El `_` deja escrito en la propia firma que el parametro existe por el test.
+
+Regla: **una garantia que se comprueba en un test necesita que el test pueda observar la
+entrada que la guarantee.** Compilar sin parametros es mas seguro que un filtro, pero
+convierte el criterio en inverificable. Cuando las dos cosas tiren en direcciones
+opuestas, gana la que se puede comprobar.
+
+## Los fixtures de un test sobreviven a proposito, y contaminan el siguiente (T5c)
+
+`courts.db.test.ts` (T4) siembra con `withAdmin`, que no lleva rollback, y su `afterAll` no
+borra nada: sus fixtures tienen que sobrevivir a su fichero para que los tests que vienen
+despues vean el mismo estado. Es la decision correcta.
+
+El coste es que `club-a` y `club-b` ya no estan vacios cuando corre el siguiente fichero, y
+eso rompio cuatro tests de T5c de formas distintas:
+
+- `toEqual([miPista])` sobre `club-a` devolvia las tres filas de T4 mas las mias.
+- El test de "un club sin pistas" apuntaba a `club-b` esperando `[]`, y `club-b` tenia la
+  fila de T4 y la mia. Para hacerlo pasar habia que inactivar filas de otro fichero.
+- El test de orden comprobaba `sortOrder === 1` sobre la primera pista. Como T4 deja tres
+  filas con `sort_order = 0`, la primera era una de T4 y el assert fallaba por los fixtures
+  ajenos, no por el `order by`. Con una sola fila visible, cualquier consulta la devuelve
+  "bien": un test de orden necesita dos filas en orden inverso al insertado.
+- La lista de claves de un objeto no incluia `id`, que el endpoint si devuelve (y T5d lo
+  necesita). El fixture de T4 tiene la misma forma, asi que ese fallo no dependia de T4.
+
+La salida fue que el fichero se siembra sus propios dos tenants, con `delete` primero para
+que una corrida que se corta a mitad no deje estado. A cambio de mas codigo, el catalogo vacio pasa
+a ser una propiedad de su construccion, y los asserts vuelven a ser exactos: `toEqual` en
+vez de `toContain`, y el orden comprobable de verdad.
+
+Regla: **un fixture que sobrevive es un fixture con nombre de tenant, o no es un fixture.**
+Si un test siembra filas en un tenant compartido, cada asercion sobre el estado de ese
+tenant deja de ser suya. Y al reescribir un test que depende del estado de otro, la
+pregunta no es "como lo hago pasar" sino "deberia este test tener su propio mundo".
+
+## `pg` convierte un array de JavaScript en N parametros, no en un array (T5c)
+
+`where id = any($1)` con `[a, b]` falla con "entrega 2 parametros, pero la sentencia
+requiere 1", porque node-postgres expande un array a un parametro bind por elemento. El
+truco que usan `courts.db.test.ts` y `rls.db.test.ts` es `[[...TABLES]]`: un array de un
+elemento que contiene el array, que `pg` no expande y serializa como literal `{a,b}`.
+
+Funciona, y es ilegible. En el mismo fichero nuevo habia un sitio con el doble array y otro
+plano, y el plano reventaba. En el codigo de produccion de este repo no hay ni un `= any($1)`,
+asi que el coste de aprender el truco es pequeno; aun asi, T5c usa un helper que escribe
+los placeholders en la sentencia, que es lo que `pg` espera y lo que se lee sin esfuerzo.
+
+Regla: **antes de envolver un array en otro array para que un driver lo entienda, escribe
+los parametros en la sentencia.** El doble array es un bug esperando a que alguien lo
+simplifique.
+

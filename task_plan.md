@@ -84,7 +84,7 @@ conviene no tenerla a medio hacer:
 |---|---|---|---|
 | **T5a** | `tenant.ts` (resuelve el tenant) + `db.ts` (consulta con rol `authenticated` y claims de servidor) | Es la base de la que dependen los otros tres. Y es donde vive la decision de seguridad | **cerrada** (`3984e17`), 11 tests DB |
 | **T5b** | `computeAvailability` en `packages/core`, pura | Logica pura sin base de datos. Se puede probar entera sin Postgres, y un fallo dice QUE HORA esta mal en vez de "el endpoint da 500" | **cerrada**, 20 tests |
-| **T5c** | `GET /api/courts` | El endpoint mas simple: valida que T5a funciona contra algo real | pendiente |
+| **T5c** | `GET /api/courts` | El endpoint mas simple: valida que T5a funciona contra algo real | **cerrada**, 17 tests DB |
 | **T5d** | `GET /api/availability?court_id&date` | El que tiene la logica de bloques y el 404 cross-tenant | pendiente |
 
 **Sobre el "100% de cobertura" de T5b:** el plan de T5 lo pedia, y al cerrarlo hay que
@@ -95,8 +95,29 @@ automatico sigue apagado a proposito** (la decision de T0 lo difiere a T7, cuand
 que no hay porcentaje medido que pueda citar. Instalar el provider es tocar el
 `package.json` y el lockfile, asi que no se ha hecho sin preguntar.
 
-**Decisiones tomadas por el usuario antes de empezar T5** (ver `findings.md`):
+**T5c cerrada**: 17 tests DB contra Postgres real, mas `TENANT_SLUG` documentada en
+`.env.example` y en el `.env.local` de la app. Tres cosas que no eran obvias y que han
+costado un rato:
 
+1. **La firma es `GET(_request: Request)`, no `GET()`.** Con cero parametros, el
+   compilador garantizaria que el handler no puede mirar la peticion, que es la garantia
+   mas fuerte del criterio 7.1. Pero entonces los tests de 7.1 son vacuos: sin `Request`
+   que pasarle, "devuelve lo mismo con `?tenant_id=` que sin el" comprueba que una funcion
+   sin entradas da dos veces lo mismo. La peticion llega, el test la manda con el
+   `tenant_id` de otro club, y la respuesta es identica. El `_` deja escrito que el
+   parametro existe por el test y no por uso.
+2. **El fichero de test se siembra sus propios tenants, y no usa los del harness.** Los
+   fixtures de T4 se siembran con `withAdmin` (sin rollback) y no se borran nunca, porque
+   tienen que sobrevivir a su fichero. Es correcto alli, pero significa que `club-a` y
+   `club-b` ya tienen filas ajenas, y por eso `toEqual([una pista])` no puede usarse sobre
+   ellos. Con dos tenants del propio fichero, el catalogo vacio pasa a ser una propiedad
+   de su construccion y los asserts vuelven a ser exactos.
+3. **`force-dynamic` verificado, no supuesto.** El `next build` de `pnpm verify` marca
+   `/api/courts` como dinamica (server-rendered on demand) y no como estatica
+   prerenderizada. Es la prueba de que la ruta no se genera en compilacion, donde no hay
+   `TENANT_SLUG` ni base de datos.
+
+**Decisiones tomadas por el usuario antes de empezar T5** (ver `findings.md`):
 1. **Un endpoint publico entra en la RLS como rol `authenticated` con un JWT de servidor
    que solo lleva `tenant_id`.** No como `service_role` (que se saltaria la RLS) ni con
    politicas `to anon` (que abririan una via de falsificacion de cabecera). La RLS sigue

@@ -980,8 +980,9 @@ STRIPE_WEBHOOK_SECRET
 STRIPE_PLATFORM_FEE_PERCENT        # 0 al lanzamiento (OQ-13)
 RESEND_API_KEY
 EMAIL_FROM_DOMAIN                  # dominio unico nuestro, compartido (OQ-12)
-NEXT_PUBLIC_APP_URL
-```
+  NEXT_PUBLIC_APP_URL
+  TENANT_SLUG                       # slug del club de ESTA instancia. Solo servidor
+  ```
 
 ---
 
