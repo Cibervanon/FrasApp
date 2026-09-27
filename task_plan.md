@@ -72,8 +72,17 @@ Phase 4 (BUILD)
       tal cual la seccion 10
 - **Status:** in_progress
 
-**Tarea actual: T3** (harness de reservas). **Checkpoint 0 cerrado**: el
+**Tarea actual: T4** (migracion `courts` + `court_blocks` con RLS y exclusion de
+solapes). **T3 cerrada**: el harness de test de integracion contra Postgres real existe
+en `apps/padel-template/src/test/db-harness.ts`, con 14 tests propios, y los 13 tests de
+RLS pasan ya por el harness. Total de integracion: 27 tests. **Checkpoint 0 cerrado**: el
 aislamiento entre tenants esta probado de verdad, no con mocks.
+
+**T3 tambien dejo `scripts/check-encoding.mjs` al principio de `pnpm verify`.** No estaba
+pedido: nacio de un hallazgo casi falso sobre mojibake, y la explicacion esta en
+`findings.md`. Es codificacion, RLS y tareas de base de datos justo el terreno donde un
+cambio de UTF-8 accidental rompe cosas en silencio, asi que ahora el primer paso de
+`verify` es mirar bytes antes que compilar.
 
 **Decisiones de infraestructura tomadas en T1** (ver `Decisions Made`): PostgreSQL
 nativo 17 en local en vez de Docker, `pnpm db:reset` propio, shim de `auth` recreando

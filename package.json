@@ -15,7 +15,8 @@
     "test:db": "turbo run test:db",
     "test:e2e": "turbo run test:e2e",
     "db:reset": "pnpm --filter @frasapp/padel-template db:reset",
-    "verify": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:db && pnpm run build"
+    "check:encoding": "node scripts/check-encoding.mjs",
+    "verify": "pnpm run check:encoding && pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:db && pnpm run build"
   },
   "devDependencies": {
     "turbo": "2.11.4",

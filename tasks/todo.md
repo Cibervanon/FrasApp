@@ -106,20 +106,31 @@ detecta un `import` de React, un `Date.now()` y un `Math.random()` plantados en 
 
 ## Fase 1: Tenancy y catalogo
 
-### [ ] T3: Harness de test de integracion contra Postgres real
+### [x] T3: Harness de test de integracion contra Postgres real
 **Spec:** seccion 11
 
 **Descripcion:** Utilidad que levanta un Postgres de test, aplica migraciones, crea tenants
 A y B, y emite JWTs de ambos. Todo test de RLS pasa por aqui.
 
 **Criterios de aceptacion:**
-- [ ] `withTenant('a', fn)` ejecuta `fn` con un JWT de tenant A contra Postgres real
-- [ ] Los tests corren en serie contra una base compartida, sin colarse entre si
-- [ ] El harness falla ruidosamente si la extension `btree_gist` no esta disponible
+- [x] `withTenant('a', fn)` ejecuta `fn` con un JWT de tenant A contra Postgres real
+- [x] Los tests corren en serie contra una base compartida, sin colarse entre si
+- [x] El harness falla ruidosamente si la extension `btree_gist` no esta disponible
 
-**Verificacion:** un test trivial que confirma que A no ve B · `pnpm test` en verde
+**Verificacion:** `db-harness.db.test.ts` confirma que A no ve B, y `pnpm verify` en verde.
 
 **Depende de:** T1 · **Alcance:** S
+
+**Nota:** el harness vive en `apps/padel-template/src/test/db-harness.ts` y tiene su
+propio test, `db-harness.db.test.ts`, con 14 casos. Los 13 tests de RLS ahora pasan por
+el harness en vez de abrir su propia conexion.
+
+**Algo anadido que no estaba pedido:** `scripts/check-encoding.mjs`, enganchado al
+principio de `pnpm verify`. El motivo esta en `findings.md`. En corto: mi comprobacion
+de codificacion manual buscaba solo CJK, dejo pasar mojibake durante T1 entera, y cuando
+por fin la mejore casi escribo un hallazgo FALSO porque la consola de PowerShell
+convierte una enye correcta en caracteres de dibujo de caja. El script mira BYTES y esta
+probado con control negativo: se planta mojibake y CJK y se comprueba que los detecta.
 
 ---
 

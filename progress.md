@@ -431,3 +431,32 @@ Recordatorio util: `listen_addresses` solo se aplica al REINICIAR. Un reload de
 configuracion no cambia nada, asi que editar el fichero y recargar deja el servidor
 igual que antes, y da la sensacion de que el cambio no funciona.
 ---
+
+## T3: harness de test de integracion (cerrada)
+
+**Commit:** pendiente de cerrar en esta misma ronda.
+
+Harness en `apps/padel-template/src/test/db-harness.ts`:
+- `TENANT_IDS` fijos para A y B, `withAdmin`, `withTenant`, `withClaims`.
+- `withTenant` hace `SET LOCAL ROLE authenticated`, inyecta `request.jwt.claims` y
+  siempre cierra con rollback, incluso si el test lanza.
+- `prepareDatabase` comprueba que la migracion esta aplicada, crea `btree_gist` y siembra
+  fixtures de forma idempotente. Falla con mensaje accionable, no con un error de pg.
+- Cerrojo `pg_advisory_lock` de sesion para que dos ficheros no se pisen sobre la misma
+  base. El test lo demuestra: una segunda conexion no consegue tomarlo.
+
+Los 13 tests de `rls.db.test.ts` ahora pasan por el harness en vez de abrir conexion
+propia. Total de integracion: 27 tests, 2 ficheros, en serie.
+
+**Anadido fuera de lo pedido:** `scripts/check-encoding.mjs`, primero de `pnpm verify`.
+Nació de un hallazgo casi falso sobre mojibake; el razonamiento esta en `findings.md`.
+Esta probado con control negativo en los dos sentidos: planta mojibake y CJK y confirma
+que los detecta, y confirma que un punto medio legitimo no se marca.
+
+**Verificacion:** `pnpm verify` completo en verde: encoding, typecheck 7/7, lint 4/4,
+59 tests unitarios, 27 de integracion y build de Next.
+
+## T4: siguiente
+
+Migracion `courts` + `court_blocks` con RLS y exclusion de solapes con `btree_gist`, que ya
+esta disponible en el PostgreSQL local (version 1.7).

@@ -505,3 +505,76 @@ El typecheck lo habria parado, pero pararlo tarde es lo mismo que no parar. Para
 dominios, escribir el tipo y DESPUES el test, leyendo el tipo, no de memoria.
 
 ---
+
+  ## Casi escribo un hallazgo FALSO: la consola de PowerShell miente sobre la codificacion
+
+  Estaba rematando la codificacion de `rls.db.test.ts` en T3, vi en el grep una palabra
+  que parecia llevar la enye corrupta, lo diagnostique como mojibake y lo escribi en
+  findings.md. **Estaba casi todo mal.**
+
+  Los bytes que siguen a la palabra son `E2 94 9C C3 A2 E2 94 AC E2 96 92`, que en UTF-8
+  son los caracteres U+251C, U+00E2, U+252C y U+2591: tres rayas de dibujo de caja y una
+  A con acento circunflejo. **La enye estaba bien decodificada; el terminal es que no sabe
+  dibujarla.** Lo unico realmente roto era otra cosa, y ya estaba bien.
+
+  La causa de mi error fue meter el contenido por `git show` con tuberia: **PowerShell lo
+  transcodifico por la pagina de codigos de la consola**, de modo que la cadena que
+  recibia ya venia danada, y yo seguia analizandola e imprimiendo sus codigos como si
+  fuera de fiar. Para analizar codificacion hay que traer los bytes del disco
+  directamente: `cmd /c "git show ... > fichero"` y despues
+  `[System.IO.File]::ReadAllBytes`. **Los bytes no pasan por la consola.**
+
+  Y al reves tambien: un punto medio (U+00B7) de `tasks/todo.md` que parecia un caracter
+  de reemplazo era el separador correcto. **Cualquier afirmacion de la consola sobre
+  codificacion es sospechosa; los bytes no.**
+
+  Nota sobre este parrafo: no pego aqui los caracteres raros que producen el fallo, ni
+  siquiera como ejemplo, porque asi el fichero los lleva de verdad y el comprobador los
+  senala a si mismo. Me ha pasado dos veces mientras escribia estas lineas. Se describen
+  con su codepoint y ya.
+
+  ## El mojibake real existia, y lo meti yo en esta misma ronda
+
+  La duda me llevo a escanear todo el repo, y `tasks/todo.md` tenia 58 apariciones del
+  punto medio con una A con circunflejo delante (bytes `C2 C2 B7`). **Esos los produje
+  yo**: lei con `Get-Content`, modifique con `-replace` y escribi con `WriteAllLines`, y
+  los caracteres del markdown se rompieron en esa ida y vuelta. Primero culpe a mi script
+  por dar 60 falsos positivos; 59 de los 60 **eran reales**. El script tenia razon y yo
+  no. Tras `git checkout tasks/todo.md` la comprobacion quedo limpia al instante, y la
+  version de HEAD ya era correcta, lo que prueba que el dano fue mio y de esta ronda.
+
+  **Dejar de usar interpolacion de cadenas en PowerShell para tocar markdown o codigo.**
+  Los acentos graves y las secuencias `\a \f \b` se interpretan como escapes: el `\a` de
+  `apps` se convierte en BEL y el `\f` de `findings.md` en salto de pagina. La forma
+  correcta es escribir el contenido con la herramienta de edicion y empalmar con
+  `[System.IO.File]::ReadAllLines` mas `WriteAllLines` y `UTF8Encoding($false)`, que no
+  interpretan escapes.
+
+  ## Mi primer comprobador de codificacion tenia dos fallos de diseño
+
+  La primera version solo buscaba CJK, y por eso dejo pasar el mojibake de T1 entera.
+  Al anadir la deteccion de mojibake use la regla «un caracter U+00C2 o U+00C3 seguido
+  de un caracter alto», y **esa regla es incorrecta**: U+00C3 es el primer byte de una
+  secuencia UTF-8 de dos bytes, asi que la o acentuada (C3 B3) es legitima y su version
+  rota (C3 83 C2 B3) tambien empieza por C3. **Una heuristica no puede distinguirlas.**
+  Esa via esta descartada y se ha borrado del script.
+
+  Lo correcto es una **allowlist**: `ALLOWED_NON_ASCII` declara todos los caracteres no
+  ASCII legitimos, enumerados byte a byte sobre el repo entero para confirmar que no
+  queda ninguno fuera, y cualquier cosa que no este en la lista se informa como error. La
+  allowlist **no puede dar falsos positivos por construccion**, porque nadie escribe
+  mojibake a proposito y todo lo legitimo hay que registrarlo.
+
+  El segundo fallo: al subir la allowlist seguian **pasando los controles C0** (BEL 0x07,
+  salto de pagina 0x0C), precisamente los que habia dejado la destruccion con
+  `Get-Content` de antes. Anadida su deteccion.
+
+  Al terminar cometi dos errores mas, ambos por no mirar la secuencia completa: al
+  enumerar codepoints descompuse C3 83 C2 B3 en U+00C3 y U+00B3 sueltos y conclui que era
+  un superindice tres legitimo, cuando era una o acentuada corrupta; y pegue caracteres
+  corruptos de ejemplo dentro de un comentario, con lo que mi propio comprobador me lo
+  senalo en el acto. **La deteccion de C0 esta probada.**
+
+  **Leccion: un comprobador automatico solo es de fiar si se ha verificado con
+  «plantar un fallo conocido y confirmar que lo atrapa».** Un comprobador que nunca ha
+  fallado es tan inutil como no tener ninguno.
