@@ -254,7 +254,8 @@ branding distinto en paralelo
 
 ## Fase 2: Logica de negocio pura
 
-### [ ] T7: `resolvePrice` con TDD `[TDD]`
+### [x] T7: `resolvePrice` con TDD `[TDD]`
+**Hecho:** implementación completa, 135 tests, cobertura 100 %, `pnpm verify` verde. Pasa a T8.
 **Spec:** secciones 4.3, 4.4, 7.3, 10
 
 **Descripcion:** Motor de precio dinamico como funcion **pura** en `packages/core`. Recibe
