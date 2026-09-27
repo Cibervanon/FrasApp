@@ -104,7 +104,7 @@ function minuteOfDay(iso: string, date: string): number {
   // puede colar, y por aqui pasaria como si ocupara hoy.
   if (match[1] !== date) {
     throw new Error(
-      `El instante '${iso}' es del dia ${match[1]} y se estaba buscandoAvailability ` +
+      `El instante '${iso}' es del dia ${match[1]} y se estaba buscando disponibilidad ` +
         `para el dia '${date}'. Un bloque de otro dia no debe llegar aqui.`,
     );
   }
