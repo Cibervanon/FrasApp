@@ -83,7 +83,15 @@ Lo que NO aplica, y en este orden de comprobacion, porque es lo que se malgasta 
 `resolvePrice` **revienta**, no devuelve un precio inventado, cuando:
 
 - `startsAt` no es `YYYY-MM-DDTHH:MM`. Mismo criterio y mismo motivo que `computeAvailability`.
-- `startTime` o `endTime` de una regla no es `HH:MM`.
+- La fecha de `startsAt` **no existe en el calendario**: 30 de febrero, mes 13, dia 0. El
+  formato la deja pasar y el dia de la semana saldria de un dia que no existe. T12 lo
+  prohibe en la base y la API exige el formato, pero aqui el dato lo pone quien llama y un
+  precio calculado sobre un dia inexistente no es un precio. El 29 de febrero SI vale, y
+  vale en 2024 y no en 2100, porque la regla del bisiesto es "divisible por 4, y si es
+  divisible por 100 tiene que serlo por 400".
+- `startTime` o `endTime` de una regla no es `HH:MM`, o es una hora que no existe. `24:00`
+  si vale: `time` de Postgres lo admite y es el cierre del dia, asi que una regla de
+  00:00 a 24:00 es la tarifa de las 24 horas. `25:00` y `10:60` no.
 - `numPlayers` o `durationMin` no son positivos.
 
 Un dia de `dayOfWeek` fuera de 0..6, en cambio, **no** revienta: la regla no casa con nada
@@ -138,6 +146,17 @@ Los casos que la spec 7.3 nombra, mas los que nacen de las decisiones de arriba:
 | 29 | `startsAt` con formato raro | lanza |
 | 30 | `numPlayers = 0` | lanza |
 | 31 | `rules` no se muta al resolver | el array sigue igual |
+| 32 | el resultado no depende del orden de llegada de las reglas | mismo `ruleId` |
+| 33 | fecha que no existe, 2026-02-30 | lanza |
+| 34 | 2024-02-29, ano bisiesto | aplica, y el dia de la semana es el suyo |
+| 35 | 2100-02-29, ano no bisiesto | lanza |
+| 36 | `startTime` 8:00 sin cero a la izquierda | lanza |
+| 37 | `endTime` 25:00 | lanza |
+| 38 | `endTime` 24:00, el cierre del dia | aplica a las 20:00 |
+| 39 | slot que cabe en una franja y solo se solapa con otra | cobra la que lo contiene entero |
+| 40 | `numPlayers = 0` con multiplicador | lanza, no un precio de 0 |
+| 41 | las lineas del desglose suman el total | con y sin multiplicador |
+| 42 | el mensaje de error nombra el dato recibido | el texto lleva el valor |
 
 ## Criterios de aceptacion
 
