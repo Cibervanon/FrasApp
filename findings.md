@@ -755,3 +755,104 @@ cuerpo **no** cambia el tenant de la consulta. Si el handler lo leyera de la pet
 lo de arriba valdria y el visitante veria el club que quisiera. Ese es el test que de verdad
 protege la decision, y va en T5d.
 
+## Availability estima, `bookings` decide (T5b)
+
+`computeAvailability` calcula que huecos hay. **No comprueba que se puedan reservar**, y esa
+distincion es la que separa este MVP de uno que vende dos veces la misma pista:
+
+- Availability es una **estimacion** en el momento de pintar la pantalla. Puede quedarse
+  obsoleta entre que el socio ve el hueco y pulsa reservar.
+- La reserva se confirma en T9 contra el `EXCLUDE` por `(tenant_id, court_id,
+  tstzrange)`, dentro de la misma transaccion que inserta la fila. Si dos intentos caen a
+  la vez, uno gana y el otro recibe un 409.
+
+De ahi sale una consecuencia que hay que dejar escrita para que T6 no la interprete al reves:
+**el 409 de "alguien te ha ganado la hora" es la respuesta normal a una carrera, no un caso
+raro.** Una pantalla que lo trate como error excepcional invite al socio a reintentar en
+bucle. Y no se puede "arreglar" haciendo que availability seat mas exacta: el hueco de T5 se
+calcula sin reservas porque la tabla todavia no existe, y cuando exista, el ultimo paso de
+la reserva sera igualmente una carrera.
+
+## Escribir el test antes que la funcion no dice que el test sea correcto (T5b)
+
+Los 20 tests de `availability.test.ts` se escribieron antes que la implementacion. De las
+expectativas iniciales, **seis estaban mal, y las seis veces la implementacion tenia
+razon**. La funcion no cambio por ninguna de ellas; se corrigieron los tests.
+
+La mejor de las seis merece nombre: un bloque de 12:00 a 14:00. Yo esperaba que el slot de
+**14:00-15:30 desapareciera**, y el test fallo porque el codigo lo dejaba. La
+implementacion es la correcta: el bloque acaba a las 14:00, un slot que empieza a las 14:00
+no lo toca, y un club que cierra la pista a las 14:00 **quiere** el hueco de las 14:00. Mi
+aritmetica estaba mal, no el codigo.
+
+Las otras cinco: `duration = 0` esperaba `[]` y la funcion lanza (y tiene reason, ver mas
+abajo); un helper `bloque()` definido dentro de un `describe` que usaba un `describe`
+hermano, dos `ReferenceError`; y dos asserts de formato de fecha.
+
+Regla: **test-first acota cuando se detecta el error, no quien lo tiene.** Un test verde
+porque la funcion se escribio a medida de el no dice nada. Lo que si dice algo es el
+control negativo: quitar el `SET LOCAL ROLE` en T5a, o el `EXCLUDE` de T4, y ver que el
+test cae. Un test que nunca ha fallado no esta verificado.
+
+## Un assert debe mirar el VALOR que fallo, no una palabra en un idioma (T5b)
+
+`expect(() => ...).toThrow(/date/i)` contra un mensaje que dice `La fecha '02/03/2026' no
+tiene formato YYYY-MM-DD`. El test pasa en codigo que no dice casi nada.
+
+Es **el mismo error que T4**, donde un `lc_messages` en espanol hizo fallar 10 de 29 tests
+buscando la frase en ingles. Ahi la Lesson fue buscar el nombre de la restriccion en vez de
+la frase. Aqui la regla es mas general: **el assert mira el valor que se recibio**, que es
+unico y no depende del idioma en que este escrito el error:
+
+```ts
+expect(() => computeAvailability(entrada({ date: "02/03/2026" }))).toThrow(/02\/03\/2026/);
+```
+
+Funciona en espanol, en ingles y en el idioma que escriba el proximo que toque este
+fichero. Y decia mas: si el mensaje dejara de nombrar la fecha, el assert cae.
+
+## Fallar y no devolver una lista vacia (T5b)
+
+`defaultDurationMin = 0` hacia colgarse el `while (cursor < end) cursor += duracion` con el
+cursor quieto. El arreglo es comprobar la duracion ANTES del bucle. Escribi primero el
+test, y el test que puse esperaba `[]`.
+
+**Estaba mal el test.** Una duracion de 0 no es "un dia sin huecos": es un dato roto. Y
+devolver `[]` le diria al club que la pista esta ocupada todo el dia, con la pantalla
+limpia y sin una sola pista de por que. Lanzar es lo correcto, y en produccion es
+alcanzable solo por un bug, porque `courts_duration_positive` y `courts_duration_ordering`
+ya garantizan `default >= min > 0`.
+
+Lo general: **un dato que no significa nada falla; un dato que significa algo todavia que
+no cuadre se ignora.** Un `court_blocks` con `ends_at = starts_at` se ignora (un intervalo
+vacio no ocupa nada) y uno con `ends_at < starts_at` tambien, aunque invertir el rango y
+"ocupa todo el dia" seria una lectura mas conservadora. Ignorar deja ver el problema en el
+test; tratar como ocupado deja al socio sin horas y sin explicacion.
+
+## Una constante exportada sin consumidor es API permanente (T5b)
+
+`DEFAULT_OPEN_MINUTE`, `DEFAULT_CLOSE_MINUTE` y el predicado `solapa` salieron exportados
+porque "un endpoint necesitara mostrarlos" y "un test podria reutilizarlos". No hay
+consumidor de ninguna de las tres cosas. Se quedaron sin exportar.
+
+Es el patron que este repo ya corrigio dos veces: las dos listas de `FeatureKey` que se
+escribieron por separado en T2, y la restriccion `court_blocks_exclusion` de T4, que se
+escribio y luego se decidio no usar hasta T9. En los dos casos, lo especificado de mas
+estaba justo a un consumidor futuro imaginario.
+
+Regla: **no se exporta hasta que exista quien lo use, y se exporta cuando aparezca.** El
+coste de revertir un `export` es gratis; el de mantenerlo es que cada fichero que lo lea
+asume un contrato que nadie pidió.
+
+## El codigo muerto se encuentra con grep, o con cobertura si la hay (T5b)
+
+`toMinute` se quedo en `availability.ts`, definido y sin usar: el parser de instantes
+apunta al regex `ISO_LOCAL` y el otro helper es del que se escribio primero. No lo detecto
+ningun test (no hay ningun test que falle por codigo que no se ejecuta) ni el typecheck
+(una funcion local no exportada y sin usar no es error de tipos bajo estos flags).
+
+Se encontro con un `grep` de una linea. Y aqui hay un argumento a favor de instalar el
+provider de cobertura que no era obvio antes: **`toMinute` es exactamente lo que un umbral
+de cobertura detecta y un test no.** Un 100% obligatorio obliga a decidir, a proposito, si
+esa funcion se borra o si se le escribe un test que no significa nada.
+

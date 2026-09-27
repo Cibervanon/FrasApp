@@ -80,12 +80,20 @@ Phase 4 (BUILD)
 partida en cuatro bloques porque T6 (pantallas) va a consumir la API que salga de aqui y
 conviene no tenerla a medio hacer:
 
-| bloque | que es | por que separado |
-|---|---|---|
-| **T5a** | `tenant.ts` (resuelve el tenant) + `db.ts` (consulta con rol `authenticated` y claims de servidor) | Es la base de la que dependen los otros tres. Y es donde vive la decision de seguridad |
-| **T5b** | `computeAvailability` en `packages/core`, pura | Logica pura con 100% de cobertura, sin base de datos. Se puede probar entera sin Postgres |
-| **T5c** | `GET /api/courts` | El endpoint mas simple: valida que T5a funciona contra algo real |
-| **T5d** | `GET /api/availability?court_id&date` | El que tiene la logica de bloques y el 404 cross-tenant |
+| bloque | que es | por que separado | estado |
+|---|---|---|---|
+| **T5a** | `tenant.ts` (resuelve el tenant) + `db.ts` (consulta con rol `authenticated` y claims de servidor) | Es la base de la que dependen los otros tres. Y es donde vive la decision de seguridad | **cerrada** (`3984e17`), 11 tests DB |
+| **T5b** | `computeAvailability` en `packages/core`, pura | Logica pura sin base de datos. Se puede probar entera sin Postgres, y un fallo dice QUE HORA esta mal en vez de "el endpoint da 500" | **cerrada**, 20 tests |
+| **T5c** | `GET /api/courts` | El endpoint mas simple: valida que T5a funciona contra algo real | pendiente |
+| **T5d** | `GET /api/availability?court_id&date` | El que tiene la logica de bloques y el 404 cross-tenant | pendiente |
+
+**Sobre el "100% de cobertura" de T5b:** el plan de T5 lo pedia, y al cerrarlo hay que
+decir la verdad sobre lo que se ha comprobado. Todas las ramas de `availability.ts` las
+ejercita un test, verificado branch por branch a mano, no por un numero. El **umbral
+automatico sigue apagado a proposito** (la decision de T0 lo difiere a T7, cuando existan
+`resolvePrice` y `computeRefund`) y el provider `@vitest/coverage-v8` no esta instalado, asi
+que no hay porcentaje medido que pueda citar. Instalar el provider es tocar el
+`package.json` y el lockfile, asi que no se ha hecho sin preguntar.
 
 **Decisiones tomadas por el usuario antes de empezar T5** (ver `findings.md`):
 

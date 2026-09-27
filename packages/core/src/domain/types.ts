@@ -134,6 +134,62 @@ export interface Court {
   readonly deletedAt: string | null;
 }
 
+/**
+ * Franja que ocupa la pista. `court_blocks` (spec 4.2) y, desde T9, las reservas.
+ *
+ * Los dos son "algo que impide reservar aqui", asi que availability los consume con la
+ * misma funcion y no distingue. En T5 solo entran los `court_blocks`, porque `bookings`
+ * todavia no existe; la firma ya esta preparada para que en T9 sea la misma llamada.
+ */
+export interface TimeRange {
+  /** ISO 8601 con offset, o `YYYY-MM-DDTHH:MM` en hora local del club. */
+  readonly startsAt: string;
+  readonly endsAt: string;
+}
+
+/**
+ * Un hueco reservable de un dia, ya restado de lo ocupado.
+ *
+ * `startsAt` y `endsAt` en ISO 8601. Deliberadamente NO lleva `priceCents`: el motor de
+ * precios es T7, y anadir el campo ahora haria que T6 (que se construye antes) leyera un
+ * numero que luego cambia de signo. Availability y precio se juntan en T12.
+ */
+export interface AvailabilitySlot {
+  readonly startsAt: string;
+  readonly endsAt: string;
+}
+
+/** Lo que hay que saber para calcular la disponibilidad de una pista en un dia. */
+export interface AvailabilityInput {
+  /** La pista. De aqui sale la duracion del slot y el nombre. */
+  readonly court: Pick<
+    Court,
+    "id" | "name" | "defaultDurationMin" | "minDurationMin" | "maxDurationMin"
+  >;
+  /** Dia en `YYYY-MM-DD`, en la zona horaria del club. */
+  readonly date: string;
+  /** Franjas que ocupan la pista ese dia. `court_blocks` y, en T9, reservas. */
+  readonly busy: ReadonlyArray<TimeRange>;
+  /**
+   * Franja de apertura en minutos desde medianoche. Por defecto 8:00-22:00, que es lo
+   * que dice el criterio 7.2.
+   *
+   * Como numeros y no como `Time`, para que la funcion sea pura de verdad: si abriera con
+   * `new Date()` a partir de una cadena, su resultado dependeria de la zona horaria del
+   * proceso, y el mismo input daria dos slots distintos en el servidor del club y en el
+   * del portátil de quien escribe el test.
+   */
+  readonly openMinuteOfDay?: number;
+  readonly closeMinuteOfDay?: number;
+}
+
+/** Resultado de `computeAvailability`. */
+export interface AvailabilityResult {
+  readonly courtId: string;
+  readonly date: string;
+  readonly slots: ReadonlyArray<AvailabilitySlot>;
+}
+
 export type PricingRuleScope = "global" | "court_type" | "court";
 
 /**
