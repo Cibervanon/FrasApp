@@ -31,7 +31,7 @@ versionado con los **9** nombres de variable de la seccion 9, sin valores reales
 - [ ] Un test smoke en cada package, para que `pnpm test` tenga algo que correr desde T0
 
 **Verificacion:** `pnpm build` · `pnpm typecheck` · test de limites de capas (vacio en esta
-tarea, se rellena en T6)
+tarea, se relleno en T6a: `ui` no importa `@supabase/*`, `core` no importa `react`)
 
 **Depende de:** nada · **Alcance:** XS
 
@@ -203,18 +203,38 @@ encontraria y el endpoint devolveria el horario de un club entero.
 
 ---
 
-### [ ] T6: Pantallas 1-2 + branding del tenant
+### [x] T6: Pantallas 1-2 + branding del tenant
 **Spec:** secciones 6.1 (pantallas 1-2), 6.3, 7.1
 
 **Descripcion:** `/` y `/pistas`, con colores, logo y nombre leidos de `tenant_branding`.
 **Cero** literals de marca en el codigo.
 
 **Criterios de aceptacion:**
-- [ ] Cambiar `tenant_branding.primary_color` cambia la app sin tocar codigo
-- [ ] **Test automatico que falla si aparece un hex de color o un nombre de club en
+- [x] Cambiar `tenant_branding.primary_color` cambia la app sin tocar codigo
+- [x] **Test automatico que falla si aparece un hex de color o un nombre de club en
       `packages/ui` o en componentes**
-- [ ] Test de limites de capas: `ui` no importa `@supabase/*`; `core` no importa `react`
-- [ ] La pantalla `/admin` no existe todavia. No se implementa aqui
+- [x] Test de limites de capas: `ui` no importa `@supabase/*`; `core` no importa `react`
+- [x] La pantalla `/admin` no existe todavia. No se implementa aqui
+
+**Progreso:** cerrada, partida en tres bloques. **T6a** (guard de literales de marca en la
+app, limites de capas en `ui`, respaldo neutro acromatico en `oklch`, commit `7318417`),
+**T6b** (`resolveBranding()` con el rol del club y RLS real, `font_family` validado en vez de
+texto libre, `ResolvedTenant.name`, control negativo que quita la politica y tumba 7 de 12
+tests, commit `f25b9a9`) y **T6c** (`readableForeground` en `core`, `brandStyle` con los
+tres colores y la fuente, `CourtList`, `readAboutClub`, layout dinamico con `generateMetadata`
+y `lang`, `/` y `/pistas`, commit `88f4d6c`). 126 tests unit, 129 tests DB contra Postgres
+real, `pnpm verify` entero en verde y las cuatro rutas del build como dinamicas.
+
+**Logo fuera de T6, y no por falta de tiempo.** La spec guarda `logo_path`,
+`favicon_path` y `hero_image_path` como rutas de Storage pero no dice en ningun sitio como
+se convierten en una URL, y no hay bucket, ni cliente de Storage, ni politicas de storage
+en la migracion. Decidido con el usuario: se resuelve en `/admin/marca` (T12), donde hay
+que subir ficheros. Las pantallas se identifican por el nombre del club, que esta en
+`tenants`. Anotado en `findings.md`.
+
+**Lo que T6c arreglo sin que nadie lo pidiera:** `/` era una ruta ESTATICA en el build, y con
+el layout leyendo la marca eso hornea el HTML de un club concreto dentro del `.next` y
+ademas obliga a la build a necesitar base de datos. `force-dynamic` lo quita.
 
 **Verificacion:** tests de componente · test de ausencia de marca · ver 2 tenants con
 branding distinto en paralelo

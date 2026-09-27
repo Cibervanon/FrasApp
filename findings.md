@@ -994,3 +994,64 @@ se decida antes de que haya una tabla de datos de club que si importen.
 
 Regla: **una cabecera de migracion que afirma una invariante es un test que no se ejecuta.**
 Si la invariante no esta cubierta por ningun test de `pg_policies`, es decoracion.
+
+## La marca se cachea por peticion, no por proceso (T6c)
+
+`resolveBranding()` no lleva cache, a proposito: el gestor la edita desde `/admin` (T12) y
+tiene que verse en la peticion siguiente. Pero el layout, `generateMetadata` y las pantallas
+la piden en el MISMO render, y sin nada que las una serian tres viajes identicos a la base
+en cada visita a la web. Se resuelve con el `cache` de React (`brandingDeLaPeticion`), que
+memoiza DENTRO de una peticion y se tira al terminarla.
+
+La distincion con el `cached` de `tenant.ts` (que vive en el proceso) es la que hace que esto
+sea seguro y no una forma de devolver el bug: si la marca se guardara en un `Map` del
+modulo, habria que elegir entre rapido y correcto.
+
+Regla: **lo que el gestor edita en caliente se memoiza por peticion, nunca por proceso.**
+
+## Una pantalla que lee la base necesita `force-dynamic` aunque no use APIs de Next (T6c)
+
+`/` era `o (Static)` en el build. Con el layout leyendo el club y su marca de la base, eso
+escribe el HTML de la marca en el `.next` en cuanto alguien lanza `next build`. Los dos
+fallos: la build necesita base de datos (en el despliegue de un club todavia no existe), y
+si existe, el club A sirve el nombre y los colores del club B sin ningun error visible.
+
+`resolveBranding()` no usa cookies, headers ni `searchParams`, asi que Next no tiene por donde
+saber que la respuesta depende de la peticion. `force-dynamic` es lo unico que lo declara.
+
+Regla: **una pagina que consulte la base declara `dynamic = "force-dynamic"`, aunque el
+compilador no lo pida.** Y el motivo no es el rendimiento, es que el HTML generado en build
+acaba sirviendo datos de otro tenant.
+
+## Sin RLS no hay "no tengo marca", hay "no me la dejan ver" (T6b)
+
+Control negativo de T6b: quitando la politica `tenant_branding_select` caen 7 de 12 tests. Lo
+que aparece es que sin politica la RLS NIEGA TODO en vez de filtrar, asi que un club CON
+marca se ve como un club SIN marca. El camino `branding: null` de `resolveBranding()` es
+ambiguo por construccion: desde dentro no se puede distinguir "no tengo fila" de "no me la
+permiten ver". Lo vigila el test positivo de RLS, escrito al lado.
+
+Es el mismo patron de la fila corrupta: un `catch` que devuelve el valor por defecto tapa los
+dos fallos. Aqui no se tapa: fila invalida revienta.
+
+Regla: **un valor por defecto que tapa un error de permisos solo es aceptable si hay un test
+que compruebe la version de arriba.**
+
+## `logo_path` no tiene a donde convertirse en URL (T6c)
+
+La spec guarda `logo_path`, `favicon_path` y `hero_image_path` como rutas de Storage, y en
+ningun sitio dice como se convierten en una URL. No hay cliente de Storage, ni bucket, ni
+politicas de storage en la migracion, ni funcion de resolucion en el codigo. Es un hueco de
+la spec, no de la implementacion.
+
+Lo que SI existe ya es `NEXT_PUBLIC_SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` en
+`.env.local`, o sea que la parte de URL publica del problema es pequeña. Lo que falta es
+decidir si el bucket es publico (cualquiera con la URL descarga el logo) o privado con una
+ruta propia que lo sirva con credenciales de servidor, cacheo y limite de tamano.
+
+Decision de T6c, con el usuario: sin logo en T6, se decide en `/admin/marca`, que es donde
+hay que subir ficheros de verdad. Las pantallas de T6 se identifican por el NOMBRE del club,
+que es dato de `tenants` y no depende de Storage.
+
+Regla: **una ruta de fichero en la base sin su resolucion a URL es un dato que no existe.**
+Antes de pintar un `src`, decidir quien convierte la ruta en URL.

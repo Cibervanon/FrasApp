@@ -9,9 +9,11 @@ producto: venta de plantilla de código y SaaS de marca blanca por instancia ais
 
 ## Next Step
 
-Plan y backlog escritos (`tasks/plan.md`, `tasks/todo.md`). Pedir al usuario la
-aprobacion del plan antes de arrancar `/build` por T0. Ojo: T13 y T18 estan marcadas como
-alcance L y hay que dividirlas al empezar.
+T6 cerrada (`88f4d6c`). Tarea siguiente: **T7** (precios y reserva: `resolvePrice`,
+`computeRefund` y el motor de disponibilidad que ya esta en T5b). Es la primera tarea
+`[TDD]` con logica de dinero, y la que habilita por fin el umbral automatico de cobertura
+que T0 dejo apagado. Antes de empezar, confirmar con el usuario el alcance de T7 y si
+`/pistas` ya puede llevar boton de reservar.
 
 ## Current Phase
 
@@ -77,11 +79,32 @@ Phase 4 (BUILD)
 - [x] **T5 completa**: T5a `tenant.ts`+`db.ts` (RLS real), T5b `computeAvailability` pura,
       T5c `GET /api/courts`, T5d `GET /api/availability?court_id&date`. 60 tests unit,
       113 tests DB, `pnpm verify` al completo
+- [x] **T6 completa en tres bloques**: T6a guard de literales de marca en la app + limites
+      de capas en `ui` + respaldo neutro acromatico, T6b `resolveBranding()` con el rol del
+      club y `font_family` validado, T6c pantallas `/` y `/pistas` con la marca en el `<html>`.
+      126 tests unit, 129 DB, `pnpm verify` al completo, y dos `next start` con distinto
+      `TENANT_SLUG` comprobados por `curl` (nombre, color y pistas distintos por club)
 - **Status:** in_progress
 
-**Tarea siguiente: T6** (pantallas de pistas y disponibilidad, que consumen la API de T5).
-T5 queda cerrada en cuatro bloques porque T6 va a consumir la API que salga de aqui y
-conviene no tenerla a medio hacer:
+**T6 en tres bloques, y por que:**
+
+| bloque | que es | por que separado | estado |
+|---|---|---|---|
+| **T6a** | guard de hex y nombres de club en lo que se renderiza, limites de capas en `ui`, respaldo `oklch` acromatico | La regla 1 necesita dientes antes de que exista el primer consumidor. Con el guard puesto primero, el codigo de T6c que se equivoca lo dice el test y no la pantalla | **cerrada** (`7318417`) |
+| **T6b** | `resolveBranding()` con `tenantQuery` y RLS, `font_family` deja de ser texto libre, `ResolvedTenant.name` | La marca tiene que LEERSE antes de que haya una pantalla que la pinte, y leerla con RLS es la decision de seguridad | **cerrada** (`f25b9a9`) |
+| **T6c** | `listCourts()` compartido, `readableForeground`, `CourtList`, `/` y `/pistas`, layout dinamico con metadata del club | Lo que se ve. Tambien es donde aparecen los fallos que solo se ven con la pantalla delante: `/` era estatica y horneaba la marca en el build | **cerrada** (`88f4d6c`) |
+
+**Lo que T6 NO incluye, y por que:** el logo, el favicon y la imagen de cabecera. La spec los
+guarda como rutas de Storage y no dice en ningun sitio como se convierten en una URL, no hay
+bucket ni cliente ni politicas de storage. Decidido con el usuario: se decide en `/admin/marca`
+(T12), donde hay que subir ficheros de verdad. Las pantallas de T6 se identifican por el
+nombre del club, que esta en `tenants` y no depende de Storage. Anotado en `findings.md`.
+
+T6 tampoco incluye precios ni reserva: eso es T7. `/pistas` no lleva boton de reservar a
+proposito, porque un boton que manda a una pantalla que no existe es peor que no tenerlo.
+
+**T5 quedo cerrada en cuatro bloques porque T6 iba a consumir la API que salia de aqui y
+conviene no tenerla a medio hacer:**
 
 | bloque | que es | por que separado | estado |
 |---|---|---|---|
