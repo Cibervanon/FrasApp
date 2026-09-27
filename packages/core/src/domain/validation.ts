@@ -117,10 +117,20 @@ export function validateCancellationPolicy(
   // El orden y los solapes se comprueban sobre la lista ORIGINAL, no sobre una
   // copia ordenada. Ordenar antes de comprobar haria que la prueba pasase siempre:
   // "ordenado" seria cierto por construccion y no estariamos midiendo nada.
-  for (let index = 1; index < tiers.length; index += 1) {
-    const previous = tiers[index - 1];
-    const current = tiers[index];
-    if (previous === undefined || current === undefined) continue;
+  //
+  // Se lleva el anterior en una variable en vez de leer `tiers[index - 1]` y
+  // `tiers[index]`, porque con `noUncheckedIndexedAccess` esos dos dan
+  // `T | undefined` y hay que guardarlos. El guardia que hacia falta era CODIGO
+  // MUERTO: el bucle solo entra con `index < tiers.length` y `index >= 1`, asi que
+  // los dos existen siempre. No se puede cubrir porque no se puede ejecutar, y
+  // v8 lo senalaba como la unica linea sin cubrir del paquete. Ademas, un guardia
+  // que no se puede ejecutar parece decir que hay un caso que no se ha pensado.
+  let previous: RefundTier | undefined;
+  for (const [index, current] of tiers.entries()) {
+    if (previous === undefined) {
+      previous = current;
+      continue;
+    }
 
     if (current.hoursBefore === previous.hoursBefore) {
       problems.push({
@@ -135,6 +145,7 @@ export function validateCancellationPolicy(
         detail: `Los tramos deben ir de mas a menos horas. El tramo ${index} tiene ${current.hoursBefore}h y el anterior ${previous.hoursBefore}h.`,
       });
     }
+    previous = current;
   }
 
   if (problems.length > 0) {

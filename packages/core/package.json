@@ -11,15 +11,19 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "lint": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "5.0.2",
     "typescript": "6.0.3",
     "vitest": "5.0.2"
   }

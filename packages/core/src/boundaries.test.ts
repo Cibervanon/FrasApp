@@ -122,6 +122,47 @@ describe("limites de capas: core es puro", () => {
   });
 });
 
+describe("el umbral de cobertura no se puede vaciar de archivos", () => {
+  /**
+   * POR QUE ESTE TEST EXISTE
+   *
+   * `coverage.thresholds` mide los ficheros que el run carga. Si nadie importa
+   * `validation.ts` en ningun test, ese fichero no aparece en el informe, y el
+   * informe sale 100%. O sea: BORRAR UN `*.test.ts` deja la cobertura al 100% y el
+   * `pnpm verify` en verde, que es el peor resultado posible para un gate: verde
+   * Midiendo menos.
+   *
+   * Se comprobo: correr `vitest run --coverage src/domain/color.test.ts` deja
+   * `availability.ts` y `validation.ts` fuera del informe y sigue marcando 100%.
+   *
+   * La regla que este test pone es la que la spec quiere decir con "100% en
+   * `core`": todo modulo de logica tiene al menos un test que lo importa. No
+   * comprueba CUANTO cubren, de eso se encarga el umbral; comprueba que estan todos.
+   */
+  it("cada modulo de logica lo importa al menos un test", () => {
+    const modulos = readdirSync(join(SRC_DIR, "domain"))
+      .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".d.ts"))
+      // Los propios tests no son modulos de logica, y sin esto el test se detecta
+      // a si mismo: `pricing.test.ts` no importa `./pricing`.
+      .filter((entry) => !entry.endsWith(".test.ts"))
+      // `types.ts` es solo declaraciones: al compilar no queda codigo que ejecutar.
+      .filter((entry) => entry !== "types.ts");
+
+    expect(modulos.length).toBeGreaterThan(0);
+
+    const fuentesDeTest = FILES.filter((file) => file.path.endsWith(".test.ts")).map(
+      (file) => file.source,
+    );
+    const sinTest = modulos.filter(
+      (modulo) =>
+        !fuentesDeTest.some((source) => source.includes(`./${modulo.slice(0, -3)}.js`)),
+    );
+
+    expect(sinTest, `modulos sin un solo test que los importe: ${sinTest.join(", ")}`)
+      .toEqual([]);
+  });
+});
+
 describe("la lista de features es la misma en core y en config-schema", () => {
   /**
    * Esta es la red que evita lo que paso en T1: `core` declaraba 5 features y

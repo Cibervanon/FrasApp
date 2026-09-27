@@ -16,13 +16,16 @@
     "test:e2e": "turbo run test:e2e",
     "db:reset": "pnpm --filter @frasapp/padel-template db:reset",
     "check:encoding": "node scripts/check-encoding.mjs",
-    "verify": "pnpm run check:encoding && pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:db && pnpm run build"
+    "verify": "pnpm run check:encoding && pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:coverage && pnpm run test:db && pnpm run build",
+    "test:coverage": "turbo run test:coverage"
   },
   "devDependencies": {
     "turbo": "2.11.4",
     "typescript": "6.0.3"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["unrs-resolver"]
+    "onlyBuiltDependencies": [
+      "unrs-resolver"
+    ]
   }
 }
