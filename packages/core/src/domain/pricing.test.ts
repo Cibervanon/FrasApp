@@ -233,6 +233,38 @@ describe("resolvePrice: desempate dentro del mismo scope", () => {
     // Y al revés en el array, para que no dependa del orden de llegada.
     expect(resolvePrice(entrada({ rules: [...rules].reverse() })).ruleId).toBe("regla-a");
   });
+
+  it("varias reglas con fechas distintas gana la mas reciente, venga en el orden que venga", () => {
+    // El caso real de un club que sube la tarifa: deja reglas de enero, de junio y de
+    // septiembre, todas de scope global y sin prioridad. Gana septiembre. Con dos reglas
+    // el `sort` de V8 hace una sola comparacion y no llega a mirar el otro sentido, asi
+    // que hacen falta tres para que el comparador se use en las dos direcciones: si el
+    // `sort` devolviera 1 siempre, esta lista saldria en orden inverso y el test falla.
+    const reglas = [
+      regla({ id: "sep", validFrom: "2026-09-01", priceCents: 7000 }),
+      regla({ id: "ene", validFrom: "2026-01-01", priceCents: 3000 }),
+      regla({ id: "jun", validFrom: "2026-06-01", priceCents: 5000 }),
+    ];
+    for (const orden of [reglas, [...reglas].reverse(), [reglas[1], reglas[2], reglas[0]] as readonly PricingRule[]]) {
+      const quote = resolvePrice(entrada({ rules: orden }));
+      expect(quote.ruleId).toBe("sep");
+      expect(quote.totalCents).toBe(7000);
+    }
+  });
+
+  it("dos filas con el MISMO id no rompen el orden", () => {
+    // La base lo prohibe con su clave primaria, asi que esto no puede llegar desde
+    // `pricing_rules`. Puede llegar desde un `join` que duplique filas, y entonces el
+    // comparador recibe dos elementos iguales: tiene que devolver 0 y no reventar.
+    // Este caso existe tambien para que la rama del `return 0` sea ejecutable, que si
+    // no el umbral de cobertura la marca como codigo muerto.
+    const gemelas = [
+      regla({ id: "mismo", priceCents: 1000 }),
+      regla({ id: "mismo", priceCents: 7000 }),
+    ];
+    const quote = resolvePrice(entrada({ rules: gemelas }));
+    expect([1000, 7000]).toContain(quote.totalCents);
+  });
 });
 
 describe("resolvePrice: day_of_week", () => {
@@ -603,6 +635,51 @@ describe("resolvePrice: lo que revienta en vez de devolver un precio", () => {
     expect(() => resolvePrice(entrada({ startsAt: "2026-09-27T10" }))).toThrow();
   });
 
+  it("un startsAt con zona horaria, que es lo que sale de la base sin convertir", () => {
+    // La decision mas importante del motor. `bookings.starts_at` es `timestamptz`, asi
+    // que lo que llega de la base trae `Z`, y las 10:00 con `Z` de un club de Madrid en
+    // verano son las 12:00 del club. Si el motor las TOMARA como locales, aplicaria la
+    // franja de las 10:00 dos horas tarde, y el error cambiaria con el horario de
+    // verano sin que nadie toque nada.
+    expect(() =>
+      resolvePrice(entrada({ rules: [regla({ startTime: "10:00", endTime: "12:00" })], startsAt: "2026-09-27T10:00:00Z" })),
+    ).toThrow(/zona/i);
+    expect(() =>
+      resolvePrice(entrada({ startsAt: "2026-09-27T10:00+02:00" })),
+    ).toThrow(/zona/i);
+    // Y el mensaje dice que hacer, no solo que esta mal.
+    expect(() =>
+      resolvePrice(entrada({ startsAt: "2026-09-27T10:00:00Z" })),
+    ).toThrow(/hora local/i);
+  });
+
+  it("un startsAt con segundos si vale, porque los segundos no cambian de tarifa", () => {
+    // `timestamptz` los trae. Dos instants que se diferencian en segundos son el mismo
+    // slot, y un motor que los distinguiera cobraria distinto a las 10:00:00 y a las
+    // 10:00:59.
+    expect(
+      resolvePrice(entrada({ rules: [regla({ priceCents: PUNTAL })], startsAt: "2026-09-27T10:00:59" }))
+        .totalCents,
+    ).toBe(PUNTAL);
+  });
+
+  it("un startsAt con una hora que no existe", () => {
+    expect(() => resolvePrice(entrada({ startsAt: "2026-09-27T25:00" }))).toThrow();
+    expect(() => resolvePrice(entrada({ startsAt: "2026-09-27T10:60" }))).toThrow();
+    // 24:00 es el cierre del dia, no una hora de reloj. Como inicio de un slot es una
+    // reserva de 24:00 que no existe.
+    expect(() => resolvePrice(entrada({ startsAt: "2026-09-27T24:30" }))).toThrow();
+  });
+
+  it("una duracion o un numero de jugadores que no son numeros", () => {
+    // `NaN` pasa el `<= 0` (comparar con NaN da false) y llegaria hasta el precio, que
+    // seria `NaN`. `NaN` no es menor que 0, asi que el guardia tiene que ser `isFinite`
+    // y no solo el signo.
+    expect(() => resolvePrice(entrada({ durationMin: Number.NaN }))).toThrow();
+    expect(() => resolvePrice(entrada({ numPlayers: Number.NaN }))).toThrow();
+    expect(() => resolvePrice(entrada({ numPlayers: Number.POSITIVE_INFINITY }))).toThrow();
+  });
+
   it("una fecha de calendario que no existe", () => {
     // El 30 de febrero. La validacion de formato lo deja pasar (30 <= 31) y el dia de
     // la semana saldria de una fecha que no existe. T12 lo prohibe en la base y la API
@@ -630,6 +707,24 @@ describe("resolvePrice: lo que revienta en vez de devolver un precio", () => {
   it("el 29 de febrero de 2100 no vale, porque 2100 no es bisiesto", () => {
     // El otro sentido de la regla del bisiesto: divisible por 100 pero no por 400.
     expect(() => resolvePrice(entrada({ startsAt: "2100-02-29T10:00" }))).toThrow();
+  });
+
+  it("febrero de los tres tipos de ano: no bisiesto, bisiesto y divisible por 400", () => {
+    // Los tres caminos de la regla del bisiesto, con el ultimo dia de cada febrero. Con
+    // `year % 4` a pelo, 2000-02-29 se rechazaria y el dia de la semana de las fechas de
+    // febrero del 2000 saldria desplazado.
+    expect(resolvePrice(entrada({ startsAt: "2023-02-28T10:00" })).totalCents).toBe(
+      PISTA.basePriceCents,
+    );
+    expect(resolvePrice(entrada({ startsAt: "2024-02-29T10:00" })).totalCents).toBe(
+      PISTA.basePriceCents,
+    );
+    expect(resolvePrice(entrada({ startsAt: "2000-02-29T10:00" })).totalCents).toBe(
+      PISTA.basePriceCents,
+    );
+    // Y los tres dias 30 de febrero, que no existen en ninguno de los tres.
+    expect(() => resolvePrice(entrada({ startsAt: "2023-02-30T10:00" }))).toThrow();
+    expect(() => resolvePrice(entrada({ startsAt: "2000-02-30T10:00" }))).toThrow();
   });
 
   it("numPlayers = 0", () => {
