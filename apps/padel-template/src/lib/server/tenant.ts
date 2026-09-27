@@ -49,6 +49,11 @@ let cached: ResolvedTenant | null = null;
  * club es su identidad, no su decorado, asi que va en la tabla del club. Ademas asi el
  * nombre se lee con el mismo viaje que la zona, en vez de en una segunda consulta.
  *
+ * `locale` tambien, y por el mismo motivo: es un dato del club, no de la marca, y cabe en el
+ * mismo `select` que el nombre y la zona. T6 lo usa para el `lang` del `<html>`, que es
+ * donde un idioma mal puesto se ve: un lector de pantalla leyendo en portugues una pagina
+ * de un club de Mallorca.
+ *
  * Viaja aqui y no se consulta en cada endpoint porque es la misma para toda la instancia: es
  * una propiedad del despliegue, no de la peticion.
  */
@@ -56,6 +61,7 @@ export interface ResolvedTenant {
   readonly id: string;
   readonly timezone: string;
   readonly name: string;
+  readonly locale: string;
 }
 
 /**
@@ -86,10 +92,14 @@ export async function resolveTenant(): Promise<ResolvedTenant> {
     );
   }
 
-  const rows = await baseQuery<{ id: string; timezone: string; name: string }>(
-    `select id, timezone, name from public.tenants where slug = $1 limit 2`,
-    [slug],
-  );
+  const rows = await baseQuery<{
+    id: string;
+    timezone: string;
+    name: string;
+    locale: string;
+  }>(`select id, timezone, name, locale from public.tenants where slug = $1 limit 2`, [
+    slug,
+  ]);
 
   if (rows.length === 0) {
     throw new Error(
@@ -117,7 +127,12 @@ export async function resolveTenant(): Promise<ResolvedTenant> {
     );
   }
 
-  cached = { id: fila.id, timezone: fila.timezone, name: fila.name };
+  cached = {
+    id: fila.id,
+    timezone: fila.timezone,
+    name: fila.name,
+    locale: fila.locale,
+  };
   return cached;
 }
 

@@ -191,14 +191,19 @@ describe("T5a: el tenant sale de la variable de entorno de la instancia", () => 
     // columna de nombre. Por eso el `toEqual` lleva las tres: si alguien "optimiza"
     // sacando el nombre a la tabla de la marca, este test dice que ha roto el contrato.
     //
+    // `locale` se cambia a proposito a `es-MX`. En la seed los dos clubes tienen `es-ES`, que
+    // es el DEFAULT de la columna, asi que afirmar `es-ES` no distinguiria "viene de la fila"
+    // de "el codigo devuelve el default". Con un valor distinto, si el `select` se olvidara
+    // de la columna, este test falla en vez de pasar.
+    //
     // Se restaura en el `finally`, no despues: si la asercion falla, la fila se queda igual y
     // los ficheros que corran despues (todos los tests del monorepo comparten esta base)
     // no se encuentran un club de Mexico sin haberlo pedido.
     await withAdmin(async (db) => {
-      await db.query(`update public.tenants set timezone = $2 where id = $1`, [
-        TENANT_IDS.b,
-        "America/Mexico_City",
-      ]);
+      await db.query(
+        `update public.tenants set timezone = $2, locale = $3 where id = $1`,
+        [TENANT_IDS.b, "America/Mexico_City", "es-MX"],
+      );
     });
     process.env["TENANT_SLUG"] = "club-b";
     clearTenantCache();
@@ -207,13 +212,14 @@ describe("T5a: el tenant sale de la variable de entorno de la instancia", () => 
         id: TENANT_IDS.b,
         timezone: "America/Mexico_City",
         name: "Club B",
+        locale: "es-MX",
       });
     } finally {
       await withAdmin(async (db) => {
-        await db.query(`update public.tenants set timezone = $2 where id = $1`, [
-          TENANT_IDS.b,
-          "Europe/Madrid",
-        ]);
+        await db.query(
+          `update public.tenants set timezone = $2, locale = $3 where id = $1`,
+          [TENANT_IDS.b, "Europe/Madrid", "es-ES"],
+        );
       });
       clearTenantCache();
     }

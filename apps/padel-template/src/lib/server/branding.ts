@@ -1,4 +1,5 @@
 import { brandingSchema, type BrandingConfig } from "@frasapp/config-schema";
+import { cache } from "react";
 
 import { tenantQuery } from "./db";
 import { resolveTenant, type ResolvedTenant } from "./tenant";
@@ -143,3 +144,19 @@ export async function resolveBranding(): Promise<ResolvedBranding> {
 
   return { tenant, branding: parseado.data };
 }
+
+/**
+ * La marca, una vez por peticion.
+ *
+ * `generateMetadata`, el layout y la pagina necesitan lo mismo en el mismo render, y sin
+ * esto se harian tres consultas identicas a `tenant_branding` en cada visita. No es un
+ * detalle: en un movil con la red mala, tres viajes a la base por pantalla se notan.
+ *
+ * Y el `cache` de React memoiza DENTRO de una peticion y se tira al acabarla, que es
+ * justo lo que hace falta aqui. Ojo con la confusion: este NO es el `cached` de
+ * `tenant.ts`, que vive en el proceso. Si esta fuera un `Map` en el modulo, habria que
+ * elegir entre rapido y correcto, y habria que elegir rapido, que es el bug que
+ * `resolveBranding` evita a proposito: el gestor cambia el color, recarga, y lo sigue
+ * viendo viejo. Con el de React no hay nada que elegir.
+ */
+export const brandingDeLaPeticion = cache(resolveBranding);

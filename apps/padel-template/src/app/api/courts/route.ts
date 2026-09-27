@@ -1,5 +1,4 @@
-import { tenantQuery } from "../../../lib/server/db";
-import { resolveTenantId } from "../../../lib/server/tenant";
+import { listCourts } from "../../../lib/server/courts";
 
 /**
  * `GET /api/courts` — el catalogo de pistas activas del club. Publica (spec 5.1).
@@ -7,10 +6,13 @@ import { resolveTenantId } from "../../../lib/server/tenant";
  * ---------------------------------------------------------------------------------------
  * LO QUE HACE, EN UN PARRAFO
  *
- * Resuelve el tenant de la instancia, consulta `courts` como el rol `authenticated` de ese
- * tenant, y devuelve las que estan activas. Sin precios: eso es T7. Sin sesiones: el
- * visitante no necesita ninguna, y por eso el endpoint es publico y aun asi la RLS sigue
- * siendo la unica que decide que filas son suyas.
+ * Devuelve el catalogo como JSON, sin precios: eso es T7. Sin sesiones: el visitante no
+ * necesita ninguna, y por eso el endpoint es publico y aun asi la RLS sigue siendo la
+ * unica que decide que filas son suyas.
+ *
+ * La consulta y el mapeo no estan aqui, estan en `lib/server/courts.ts`, porque la pantalla
+ * `/pistas` (T6) necesita lo mismo. Este fichero es lo que no se puede compartir: leer el
+ * `Request`, decidir el status, poner las cabeceras y no filtrar el error a la respuesta.
  * ---------------------------------------------------------------------------------------
  *
  * ---------------------------------------------------------------------------------------
@@ -51,7 +53,7 @@ import { resolveTenantId } from "../../../lib/server/tenant";
  * El criterio 7.1 esta escrito en la spec, asi que necesita un test que lo observe. Por eso
  * la firma acepta la peticion y la firma se niega a mirarla: la peticion llega, el test la
  * manda con `?tenant_id=` de otro club, y la respuesta es la MISMA. El `_` deja claro en la
- * propia firma que el parametro existe por un motivo de test, no de uso. Si algum dia se
+ * propia firma que el parametro existe por un motivo de test, no de uso. Si algun dia se
  * borra el parametro, el `Expected 0 arguments` del test avisa antes de que el criterio
  * quede sin comprobar.
  */
@@ -87,95 +89,9 @@ export const dynamic = "force-dynamic";
  */
 const SIN_CACHE = "no-store";
 
-/** Una fila de la respuesta. Los nombres en camelCase, como los tipos de `core`. */
-interface CourtFila {
-  readonly id: string;
-  readonly name: string;
-  readonly court_type: string;
-  readonly surface: string | null;
-  readonly indoor: boolean;
-  readonly num_players: number;
-  readonly default_duration_min: number;
-  readonly min_duration_min: number;
-  readonly max_duration_min: number;
-  readonly sort_order: number;
-  readonly image_path: string | null;
-}
-
-/** Una pista como sale por la API. Sin `tenant_id` y sin `base_price_cents`, a proposito. */
-interface CourtJson {
-  readonly id: string;
-  readonly name: string;
-  readonly courtType: string;
-  readonly surface: string | null;
-  readonly indoor: boolean;
-  readonly numPlayers: number;
-  readonly defaultDurationMin: number;
-  readonly minDurationMin: number;
-  readonly maxDurationMin: number;
-  readonly sortOrder: number;
-  readonly imagePath: string | null;
-}
-
-/**
- * Snake_case -> camelCase, en el BORDE.
- *
- * Aqui, y no antes. La columna se llama `default_duration_min` porque Postgres y porque la
- * migracion esta en SQL; lo que sale por la red se llama `defaultDurationMin` porque
- * `packages/core` lo llama asi. Si el mapeo viviera en el cliente, cada pantalla tendria que
- * acordarse, y olvidarlo una vez en T6 significa que la duracion sale `undefined` y el
- * endpoint devuelve 200 con un numero que no existe.
- *
- * La lista de campos es EXPLICITA, no un `select *` renombrado. Es lo que hace que
- * `base_price_cents` y `tenant_id` no aparezcan por descuido: no estan en la lista, y un
- * campo nuevo en la migracion no aparece en la API hasta que alguien lo escriba aqui.
- */
-function aPista(fila: CourtFila): CourtJson {
-  return {
-    id: fila.id,
-    name: fila.name,
-    courtType: fila.court_type,
-    surface: fila.surface,
-    indoor: fila.indoor,
-    numPlayers: fila.num_players,
-    defaultDurationMin: fila.default_duration_min,
-    minDurationMin: fila.min_duration_min,
-    maxDurationMin: fila.max_duration_min,
-    sortOrder: fila.sort_order,
-    imagePath: fila.image_path,
-  };
-}
-
-/**
- * Catalogo de pistas activas del club.
- *
- * `is_active` y `deleted_at` son filtros de NEGOCIO, no de seguridad, asi que van en la
- * consulta. El aislamiento no: ese lo pone la RLS, y por eso la consulta no lleva
- * `where tenant_id = ...`. Anadirlo seria redundante y peligroso, porque un dia alguien lo
- * borraria "porque la RLS ya lo hace" y ese dia la seguridad dependeria de que nadie se
- * acuerde de la linea que se borro.
- *
- * El `order by sort_order, name` es la opinion del club sobre como se ven sus pistas, no una
- * preferencia del cliente. `name` va segundo como desempate para que dos pistas con el mismo
- * `sort_order` no cambien de sitio entre peticiones, que es lo que hace que una pestana que
- * recarga no vea las pistas saltando.
- */
-const SQL_CATALOGO = `
-  select id, name, court_type, surface, indoor, num_players,
-         default_duration_min, min_duration_min, max_duration_min,
-         sort_order, image_path
-    from public.courts
-   where is_active
-     and deleted_at is null
-   order by sort_order, name
-`;
-
 export async function GET(_request: Request): Promise<Response> {
   try {
-    const tenantId = await resolveTenantId();
-    const filas = await tenantQuery<CourtFila>(tenantId, SQL_CATALOGO);
-
-    const pistas = filas.map(aPista);
+    const pistas = await listCourts();
     return Response.json(pistas, { headers: { "cache-control": SIN_CACHE } });
   } catch (error: unknown) {
     // El error COMPLETO va al log, con su mensaje, su causa y su `tenant_id` de contexto.
@@ -185,7 +101,7 @@ export async function GET(_request: Request): Promise<Response> {
     // de un socio.
     //
     // `console.error` y no un logger: Next lo captura en stdout y lo manda a la plataforma
-    // donde se mire. Cuando haya dos o tres endpoints y haga falta correlación, se mete un
+    // donde se mire. Cuando haya dos o tres endpoints y haga falta correlacion, se mete un
     // logger con request-id, y se cambia en un solo sitio. Anadirlo ahora seria admitir una
     // dependencia que no tiene consumidor, que es el error que T5b corrigio en `core`.
     console.error(
