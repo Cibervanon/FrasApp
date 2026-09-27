@@ -134,21 +134,39 @@ probado con control negativo: se planta mojibake y CJK y se comprueba que los de
 
 ---
 
-### [ ] T4: Migracion `courts` + `court_blocks` con RLS
+### [x] T4: Migracion `courts` + `court_blocks` con RLS
 **Spec:** secciones 4.2, 4.4.1
 
 **Descripcion:** `courts` con `unique (tenant_id, name) where deleted_at is null`, y
 `court_blocks` como overlay de disponibilidad que no genera reservas.
 
 **Criterios de aceptacion:**
-- [ ] Ambas tablas con `tenant_id not null`, RLS completa y `FORCE ROW LEVEL SECURITY`
-- [ ] `courts.min_duration_min <= default_duration_min <= max_duration_min` con `check`
-- [ ] `court_blocks` con `check (ends_at > starts_at)`
-- [ ] Un JWT de tenant A no lee ni escribe filas de `court_blocks` de tenant B
+- [x] Ambas tablas con `tenant_id not null`, RLS completa y `FORCE ROW LEVEL SECURITY`
+- [x] `courts.min_duration_min <= default_duration_min <= max_duration_min` con `check`
+- [x] `court_blocks` con `check (ends_at > starts_at)`
+- [x] Un JWT de tenant A no lee ni escribe filas de `court_blocks` de tenant B
 
-**Verificacion:** `pnpm db:reset` · test de integracion de aislamiento en las 2 tablas
+**Ademas de lo pedido, y por que:**
+- [x] FK **compuesta** `(tenant_id, court_id) -> courts (tenant_id, id)`. La de la spec
+      (`references courts(id)`) deja que A bloquee una pista de B. Probado con control
+      negativo: con la de la spec el INSERT tiene exito y cae 1 test de 56.
+- [x] `unique (tenant_id, id)` en `courts`, que es lo que hace posible esa FK
+- [x] `court_type`, `surface` y `reason` promovidos de comentario a `check`
+- [x] `check` de jugadores 2-4, precio no negativo, duracion minima positiva, nombre no
+      vacio y `image_path` con el mismo formato que `tenant_branding_logo_path_format`
+- [x] `surface` sigue siendo nullable como dice la spec
+- [x] Sin `EXCLUDE` en `court_blocks`: el solape de dos mantenimientos no es un problema.
+      El `EXCLUDE` es el de `bookings`, en T9
+
+**Verificacion:** `pnpm db:reset` · `pnpm verify` completo en verde · 56 tests de
+integracion en 3 ficheros, en serie, de los que 29 son nuevos
 
 **Depende de:** T3 · **Alcance:** S
+
+**Correccion de plan:** la extension `btree_gist` la instala la migracion
+`20260926000000_extensions.sql`, no el harness. El harness la comprueba y falla con un
+mensaje que dice `pnpm db:reset`. T3 la creaba, y eso hacia que un `create extension` de
+un test pareciera parte del despliegue.
 
 ---
 

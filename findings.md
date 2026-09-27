@@ -578,3 +578,134 @@ dominios, escribir el tipo y DESPUES el test, leyendo el tipo, no de memoria.
   **Leccion: un comprobador automatico solo es de fiar si se ha verificado con
   «plantar un fallo conocido y confirmar que lo atrapa».** Un comprobador que nunca ha
   fallado es tan inutil como no tener ninguno.
+
+---
+
+## El idioma de los errores de Postgres es el que tiene TU motor, no el que esperas (T4)
+
+El PostgreSQL local tiene `lc_messages` en español. Un assert que buscaba
+`/violates check constraint "courts_duration_ordering"/` falló en **10 de 29 tests**,
+porque Postgres respondió:
+
+```
+el nuevo registro para la relación «courts» viola la restricción «check» «courts_duration_ordering»
+```
+
+Lo grave no es que fallaran: es que **fallaron por el idioma, no porque el esquema
+aceptara lo que no debía**. Un assert de rojo que depende del idioma detecta dos cosas a
+la vez y no sabe cuál. Si hubiera estado en inglés, esos 10 tests habrían sido la mitad
+de la suite mintiendo.
+
+El arreglo no es añadir la traducción al regex. Es **dejar de buscar la frase y buscar el
+nombre de la restricción**: `new RegExp(constraint)`. El nombre es único en la base, no
+depende del idioma ni de la redacción de Postgres entre versiones, y es **más** preciso
+que la frase, que podría cambiar sin que cambie nada.
+
+Regla: **un assert sobre el error de una restricción compara el nombre, nunca la frase.**
+Lo mismo aplica a `violates row-level security policy`, que en `rls.db.test.ts` ya
+aceptaba las dos lenguas a mano porque me pillo antes. Con el nombre, no hace falta.
+
+Es el mismo fallo de `## Un test de rechazo que no mira el motivo no prueba el motivo
+(T2)`, visto desde el lado del motivo: allí miraba el motivo equivocado, aquí el
+equivocado en el idioma equivocado.
+
+## Una FK que no incluye el tenant deja escribir en el tenant de otro (T4)
+
+La spec escribe, para `court_blocks`:
+
+```sql
+court_id uuid not null references courts(id) on delete cascade
+```
+
+`id` es único en toda la base, así que la FK es válida... y por lo mismo **no dice nada
+sobre el tenant**. El tenant A puede insertar un bloqueo que apunta a una pista del tenant
+B. El bloqueo no aparece en la disponibilidad de B, pero sí en la de A, sobre una pista que
+no es suya, y el `court_id` que sale en el panel del gestor es de otro club.
+
+Lo que cierra el agujero no es reescribir la spec, es **meter el tenant en la
+referencia**: `foreign key (tenant_id, court_id) references courts (tenant_id, id)`, que
+obliga a un `unique (tenant_id, id)` en la tabla referenciada.
+
+**Probado, no arguido.** Con la FK tal cual la deja la spec, el INSERT cross-tenant tiene
+éxito (`rowCount: 1`) y cae **exactamente un test de 56**. Con la FK compuesta pasan los
+56. El control negativo es lo que convierte esto en un hallazgo; sin él era una opinión
+razonable.
+
+Regla general: **una FK entre dos tablas multi-tenant tiene que llevar el `tenant_id` en las
+dos columnas.** Si las dos tablas tienen `tenant_id` y la FK no lo menciona, no está
+aislando nada, solo Garibaldi.
+
+## Un número esperado heredado de otro test afirma algo que nadie comprobó (T4)
+
+`toHaveLength(1)` en el test de aislamiento de `courts`, copiado del `rls.db.test.ts` de
+tenancy, donde **cada tenant tiene exactamente una fila**. En T4 el tenant A tiene tres
+pistas: la suya, la retirada y la que ocupa el nombre. El test falló con
+`expected [ ...(3) ] to have a length of 1 but got 3`, y con razón: el número estaba
+copiado, no contado.
+
+El arreglo fue un mapa explícito `EXPECTED_ROWS` por tabla y tenant, escrito mirando los
+fixtures. Y el assert quedo con dos mitades: el **número** (donde se ve un `USING` roto
+que se cuela) y que **todas** las filas sean suyas (donde se ve una fila ajena colada
+aunque el total cuadre por casualidad). Las dos hacen falta: una sola de ellas deja pasar
+al otro fallo.
+
+Regla: **un número esperado sale de contar los fixtures, nunca de acordarse del test
+anterior.** Y si el test mira dos cosas, que mire las dos, no una.
+
+## Generalizar un test a varias tablas puede perder sus parámetros (T4)
+
+Al convertir el UPDATE de RLS de una tabla a un bucle sobre `["courts", "court_blocks"]`,
+quité el `where tenant_id = $1` para que la query quedara simétrica, y `$1` se quedó sin
+usar: `no se pudo determinar el tipo del parámetro $1`. Dos tests rojos.
+
+`$1` sin usar no es un error de tipos: es un parámetro que ya no significa nada, y
+Postgres no puede adivinar de qué tipo era. La query "simplificada" era además la que no
+hacía lo que el test decía hacer — sin `where`, el UPDATE no tenía a qué filas moverse,
+así que el aislamiento estaba midiendo otra cosa.
+
+## Una extensión que crea el harness de test no existe en producción (T3 → T4)
+
+`prepareDatabase` hacía `create extension if not exists btree_gist` porque era lo
+cómodo: garantizaba verde sin pedirle nada a nadie. El problema es que **el `create
+extension` de un test no se despliega**: en Supabase, en la instancia del cliente, esa
+extensión no estaría y el primer `EXCLUDE` de T5 reventaría en producción con un error de
+`operator does not exist: uuid &&& uuid`.
+
+Lo que se hizo, y que además era lo que ya irritaba desde T3: la extensión la instala
+**la migración** (`20260926000000_extensions.sql`), y el harness solo **comprueba** que
+esté, con un mensaje que dice `pnpm db:reset`. El test de la extensión se reescribió para
+comprobar que el harness **falla con ese mensaje**, no que la extensión "esté disponible"
+—que era la forma de que el test pasara siempre, porque él mismo la acababa de crear.
+
+Regla: **el esquema lo define la migración. Un test puede afirmar sobre el estado del
+esquema, nunca establecerlo.**
+
+## Una suite que depende de una base de datos no puede cachearse (T4)
+
+`turbo.json` cacheaba `test:db` como si fuera un test unitario. La clave de cache de turbo
+es el hash de los **ficheros** de entrada, y la base de datos no es un fichero: es estado
+externo. Así que cualquier estado de PostgreSQL que no se deduzca de los sources es
+invisible para la cache.
+
+El escenario: `pnpm verify` pasa en verde y turbo guarda el resultado. Alguien borra una
+tabla, o un `db:reset` se corta por la mitad, o se restaura un dump viejo. Se vuelve a
+lanzar `pnpm verify` y turbo responde `cache hit, replaying logs`, imprime los tests en
+verde de una ejecución antigua y **no ha vuelto a tocar la base**. Quien lo lee deduce que
+el esquema está bien.
+
+Esto no es hipotético aquí: durante T4, un `pnpm verify` dio `test:db: cache hit` y
+reportó los 56 tests en verde **sin ejecutarlos**. Era válido por casualidad, porque la
+ejecución anterior sí había pasado contra esa base, pero fue casualidad y no diseño. Y
+peor: un control negativo depende justamente de alterar la base a mano, que es el caso
+que la cache esconde. El control de `btree_gist` de T3 salió bien porque un fallo no se
+cachea, pero la cache de un **verde** es justo la que miente.
+
+Arreglado con `"cache": false` en la tarea `test:db`. Confirmado: ahora turbo imprime
+`test:db: cache bypass, force executing` y los 56 tests corren contra la base viva.
+
+Regla: **`cache: false` en todo lo que dependa de un estado fuera del repo.** Tests
+unitarios, typecheck y lint cachean bien porque sus entradas son los ficheros. Un test
+contra base de datos, un e2e contra un servidor, un lint sobre la salida de otro comando:
+todo eso depende de algo que el hash no ve. Y `cache: false` no cuesta nada: 11 s de 56
+tests contra un motor de Postgres real es un precio razonable por no mentir.
+

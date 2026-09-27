@@ -70,12 +70,17 @@ Phase 4 (BUILD)
       se inventaban `accentColor`, `percent` y 5 features de 7), `validateCancellationPolicy`
       puro, guard de limites de capas con control negativo, `PriceQuote`/`PricingInput`
       tal cual la seccion 10
+- [x] **T3 completa**: harness de integracion contra Postgres real, 14 tests propios, y
+      `scripts/check-encoding.mjs` al principio de `verify`
+- [x] **T4 completa**: `courts` + `court_blocks` con RLS y `FORCE`, FK compuesta que
+      impide el bloqueo cross-tenant, 29 tests nuevos con control negativo
 - **Status:** in_progress
 
-**Tarea actual: T4** (migracion `courts` + `court_blocks` con RLS y exclusion de
-solapes). **T3 cerrada**: el harness de test de integracion contra Postgres real existe
-en `apps/padel-template/src/test/db-harness.ts`, con 14 tests propios, y los 13 tests de
-RLS pasan ya por el harness. Total de integracion: 27 tests. **Checkpoint 0 cerrado**: el
+**Tarea actual: T5** (endpoints `GET /api/courts` y `GET /api/availability`, sin precios).
+**T4 cerrada**: `courts` y `court_blocks` existen con RLS completa y `FORCE`, 8 politicas,
+29 tests nuevos, 56 de integracion en total. **T3 cerrada**: el harness de test de
+integracion contra Postgres real esta en `apps/padel-template/src/test/db-harness.ts`, con
+14 tests propios, y los 13 tests de RLS pasan por el harness. **Checkpoint 0 cerrado**: el
 aislamiento entre tenants esta probado de verdad, no con mocks.
 
 **T3 tambien dejo `scripts/check-encoding.mjs` al principio de `pnpm verify`.** No estaba
@@ -83,6 +88,15 @@ pedido: nacio de un hallazgo casi falso sobre mojibake, y la explicacion esta en
 `findings.md`. Es codificacion, RLS y tareas de base de datos justo el terreno donde un
 cambio de UTF-8 accidental rompe cosas en silencio, asi que ahora el primer paso de
 `verify` es mirar bytes antes que compilar.
+
+**Lo que T4 dejo escrito en la base, mas alla de la spec:**
+- `court_blocks` usa FK compuesta `(tenant_id, court_id)`, no `references courts(id)`. La
+  de la spec permite que un tenant bloquee una pista de otro; esta no. Probado con control
+  negativo, no arguido. Ver `findings.md`.
+- `court_type`, `surface` y `reason` son `check`, no texto libre. Con `court_type` libre la
+  tarifa por tipo de pista no casa nunca y no salta ningun error.
+- `btree_gist` la instala `20260926000000_extensions.sql`. El harness la comprueba, no la
+  crea. Es la extension que necesita el `EXCLUDE` de `bookings` en T9, no `court_blocks`.
 
 **Decisiones de infraestructura tomadas en T1** (ver `Decisions Made`): PostgreSQL
 nativo 17 en local en vez de Docker, `pnpm db:reset` propio, shim de `auth` recreando
@@ -170,6 +184,10 @@ VERI\*FACTU que solo aplica al modulo de facturacion (fuera del MVP).
 | `el rol "anon" ya existe` al segundo `db:reset` | 1 | Los roles son de CLUSTER, no de base de datos: `drop database` no los borra. El shim tiene que ser idempotente con `pg_roles` |
 | `Falta PGPASSWORD` en el test pese a existir `.env.local` | 1 | `import.meta.url` no es ruta de fichero en los setupFiles de Vitest, el directorio calculado no existia y el `existsSync` callaba. Ahora usa `process.cwd()` |
 | `.gitignore` de T0 sin efecto en la app | 1 | Un patron con `/` interno se ancla a la raiz: `supabase/.temp/` no cubria `apps/padel-template/supabase/.temp/`. Corregido a `**/supabase/...` |
+| 10 asserts de T4 en rojo buscando `violates check constraint` en ingles | 1 | El PostgreSQL local tiene `lc_messages` en espanol. Fallaban **por el idioma**, no porque el esquema aceptara lo indebido. Ahora el assert compara solo el nombre de la restriccion |
+| `toHaveLength(1)` en el aislamiento de `courts` | 1 | Copiado del test de tenancy, donde cada tenant tiene una fila. En T4 el tenant A tiene tres. Los numeros esperados salen de contar los fixtures, en un mapa explicito |
+| `no se pudo determinar el tipo del parametro $1` | 1 | Al generalizar el UPDATE de RLS a un bucle sobre dos tablas se perdio el `where tenant_id = $1`, y `$1` sin usar no tiene tipo. La query ya no hacia lo que el test decia |
+| Dos caracteres CJK escritos a proposito en `findings.md` al redactar una entrada | 1 | Se colaron al escribir el texto, no por corrupcion de codificacion. `scripts/check-encoding.mjs` los senalo y se corrigieron antes de commitear. Es el fallo que el checker existe para cazar, y cazo el suyo |
 
 ## Notes
 

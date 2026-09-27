@@ -434,14 +434,15 @@ igual que antes, y da la sensacion de que el cambio no funciona.
 
 ## T3: harness de test de integracion (cerrada)
 
-**Commit:** pendiente de cerrar en esta misma ronda.
+**Commit:** `61a0ef0`.
 
 Harness en `apps/padel-template/src/test/db-harness.ts`:
 - `TENANT_IDS` fijos para A y B, `withAdmin`, `withTenant`, `withClaims`.
 - `withTenant` hace `SET LOCAL ROLE authenticated`, inyecta `request.jwt.claims` y
   siempre cierra con rollback, incluso si el test lanza.
-- `prepareDatabase` comprueba que la migracion esta aplicada, crea `btree_gist` y siembra
-  fixtures de forma idempotente. Falla con mensaje accionable, no con un error de pg.
+- `prepareDatabase` comprueba que la migracion esta aplicada, comprueba que `btree_gist`
+  esta instalada y siembra fixtures de forma idempotente. Falla con mensaje accionable,
+  no con un error de pg.
 - Cerrojo `pg_advisory_lock` de sesion para que dos ficheros no se pisen sobre la misma
   base. El test lo demuestra: una segunda conexion no consegue tomarlo.
 
@@ -453,10 +454,79 @@ Nació de un hallazgo casi falso sobre mojibake; el razonamiento esta en `findin
 Esta probado con control negativo en los dos sentidos: planta mojibake y CJK y confirma
 que los detecta, y confirma que un punto medio legitimo no se marca.
 
+**Follow-up de T3, commit aparte:** `prepareDatabase` creaba `btree_gist`, y eso convertia
+un `create extension` de test en algo que parecia parte del despliegue: en la instancia de
+un cliente esa extension no estaria, y el primer `EXCLUDE` de T9 reventaria en produccion.
+Ahora la extension la instala `20260926000000_extensions.sql` y el harness solo la
+comprueba, con un mensaje que dice `pnpm db:reset`. El test se reescribio para comprobar
+que el harness **falla con ese mensaje**, no que la extension "este disponible", que era la
+forma de que pasara siempre porque el mismo test la acababa de crear. Probado en los dos
+sentidos: quitando `btree_gist` de la base, la suite cae en `beforeAll`; tras
+`pnpm db:reset`, vuelven a pasar 27.
+
 **Verificacion:** `pnpm verify` completo en verde: encoding, typecheck 7/7, lint 4/4,
 59 tests unitarios, 27 de integracion y build de Next.
 
-## T4: siguiente
+## T4: catalogo de pistas (cerrada)
 
-Migracion `courts` + `court_blocks` con RLS y exclusion de solapes con `btree_gist`, que ya
-esta disponible en el PostgreSQL local (version 1.7).
+Migracion `20260926000200_courts.sql` con `courts` y `court_blocks`, RLS completa y
+`FORCE ROW LEVEL SECURITY` en las dos, 8 politicas en total.
+
+**Correccion de plan:** la nota anterior de T4 decia "exclusion de solapes con
+`btree_gist`" en esta migracion. Era incorrecta, y no por poco. `court_blocks` NO lleva
+`EXCLUDE`, y `btree_gist` no lo necesita: quien solapa franjas sobre una misma pista son
+dos mantenimientos, y que se pisen no rompe nada porque un cierre no genera reservas, no
+cobra y no entra en el calculo de reembolso. Meter un `EXCLUDE` ahi habria indexado la
+tabla para un problema que no existe. El `EXCLUDE` que si lo necesita es el de `bookings`,
+en **T9**, para que nadie reserve dos veces la misma pista. Por eso la extension se
+instala ya en una migracion propia y no en esta.
+
+**La FK compuesta, y por que es la decision que mas importa.** La spec escribe
+`court_id uuid not null references courts(id) on delete cascade`, y asi, sin tenant dentro
+de la referencia, el tenant A puede crear un bloqueo sobre una pista del tenant B. El
+bloqueo no aparece en la disponibilidad de B, pero si en la de A, sobre una pista que no
+es suya. Aqui va `foreign key (tenant_id, court_id) references courts (tenant_id, id)`, que
+obliga a `UNIQUE (tenant_id, id)` en `courts`.
+
+Probado, no supuesto: con la FK tal cual la deja la spec, el INSERT cross-tenant tiene
+exito (`rowCount: 1`) y cae exactamente un test de 56. Con la FK compuesta, los 56 pasan.
+El control negativo esta en el historial de esta sesion.
+
+**Comments de la spec promovidos a `check`.** `court_type`, `surface` y el `reason` de
+`court_blocks` estan como comentario en la spec, no como restriccion. Con
+`court_type` libre, una pista 'cristal' y otra 'Cristal' no se parecerian nunca al cruzar
+con `pricing_rules.scope = 'court_type'` y la tarifa del club no se aplicaria a ninguna de
+las dos sin que saltase NINGUN error: se rompe en silencio. `surface` sigue siendo nullable
+como dice la spec, y su `check` admite null. Anadido `courts_name_not_blank`, que la spec
+no pide: un nombre en blanco es una fila vacia en el panel de un gestor no tecnico.
+
+`courts_image_path_format` usa el mismo regex y el mismo sufijo que
+`tenant_branding_logo_path_format` de la 001. Precedente, no invento.
+
+**29 tests nuevos** en `src/lib/courts.db.test.ts`. Integracion: 56 tests, 3 ficheros, en
+serie. Tres cosas que fallaron y que teaches sobre los tests, no sobre el esquema:
+- El PostgreSQL local tiene `lc_messages` en espanol. Buscar `/violates check
+  constraint/` en ingles no casa nunca y fallo 10 tests. El assert busca ahora solo el
+  nombre de la restriccion, que es unico en la base, no depende del idioma y es mas
+  preciso que la frase.
+- `toHaveLength(1)` copiado del test de tenancy, donde cada tenant tiene una fila. Aqui A
+  tiene tres y fallo. Los numeros.expected salen de contar los fixtures, en un mapa
+  explicito, no de memoria.
+- Al generalizar el UPDATE a las dos tablas se perdio el `where tenant_id = $1`, y `$1` sin
+  usar da "no se pudo determinar el tipo del parametro $1".
+
+**Verificacion:** `pnpm verify` completo en verde: encoding, typecheck 7/7, lint 4/4,
+59 tests unitarios, 56 de integracion y build de Next.
+
+## T5: siguiente
+
+`GET /api/courts` y `GET /api/availability`, con `court_blocks` como overlay. Sin precios:
+aun no existe el motor.
+
+Con lo que se ha cerrado en T4, T5 ya tiene su base: la FK compuesta garantiza que un
+bloqueo solo puede apuntar a una pista del propio tenant, asi que el overlay no puede
+filtrar franjas sobre pistas de otro club aunque se intente.
+
+Sigue sin verificar si `pg_cron` esta disponible en el PostgreSQL nativo de Windows. No
+bloquea T5, pero decide T9: si no esta, los recordatorios de caducidad van en Edge
+Function y `EXCLUDE` sigue necesitando `btree_gist`, que esa si esta probada.
