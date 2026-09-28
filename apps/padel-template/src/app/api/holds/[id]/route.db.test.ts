@@ -1,4 +1,4 @@
-﻿import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { POST } from "../route";
 import { DELETE } from "./route";
