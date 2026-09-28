@@ -101,12 +101,17 @@ alter table public.bookings add constraint bookings_pending_payment_needs_intent
 
 -- pending_payment siempre esta sin pagar. Nada entra en pending_payment ya pagado.
 alter table public.bookings add constraint bookings_pending_payment_unpaid
-  check (status <> 'pending_payment' or payment_status = 'unpaid');
+  check (status <> 'pending_payment' or payment_status is not distinct from 'unpaid');
 
 -- confirma el webhook, y el webhook solo confirma pagando.
 alter table public.bookings add constraint bookings_confirmed_is_paid
-  check (status <> 'confirmed' or payment_status = 'paid');
+  check (status <> 'confirmed' or payment_status is not distinct from 'paid');
 ```
+
+`is not distinct from` es la forma FINAL (E1 la endurecio tras un test rojo): con `= 'unpaid'`,
+una fila con `payment_status` NULL deja el check en NULL y Postgres lo DEJA pasar. El test
+"pending_payment sin payment_status (NULL)" es el que obliga a esta forma, y es la unica
+que cubre el agujero.
 
 `bookings_confirmed_is_paid` es compatible con T15 (partido abierto inserta `confirmed` +
 `paid` de una pieza). El `application_fee_amount` es 0 por defecto de la columna (T9) y no
