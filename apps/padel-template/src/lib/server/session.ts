@@ -71,22 +71,43 @@ function valorCrudo(encoded: string): string {
 }
 
 /**
- * El `sub` de la peticion, o `null` si no hay sesion.
+ * El `sub` que viaje en el VALOR de la cookie, o `null` si no hay sesion.
  *
- * `null` significa una sola cosa: este handler no tiene identidad. El 401 que responda la
- * ruta es de "sesion inexistente", no de "credenciales invalidas": no hay ninguna
- * credencial que verificar todavia.
+ * Es el valor crudo que devuelve `cookies()` de `next/headers` ya desnombrado: viene
+ * sin el `frasapp_session=` delante, y una pantalla de servidor no tiene la cabecera
+ * entera para pasarle a `subDeCabecera`.
  */
-export function subDeSesion(request: Request): string | null {
-  const cabecera = request.headers.get("cookie");
-  if (cabecera === null) return null;
-  const coincidencia = /(?:^|;)\s*frasapp_session=([^;\s]+)/.exec(cabecera);
-  if (coincidencia === null) return null;
-  const valor = coincidencia[1];
-  if (valor === undefined || valor.length === 0) return null;
+export function subDeValor(valor: string | null | undefined): string | null {
+  if (valor === null || valor === undefined) return null;
+  if (valor.length === 0) return null;
 
   const jwt = payloadDe(valorCrudo(valor));
   const sub = jwt?.sub;
   if (typeof sub !== "string" || !FORMATO_UUID.test(sub)) return null;
   return sub;
+}
+
+/**
+ * El `sub` que viaje en una cabecera `cookie` cruda, o `null` si no hay sesion.
+ *
+ * Es la misma lectura que `subDeSesion`, separada para que una pantalla de servidor
+ * (que no recibe un `Request`, sino la cookie de `next/headers`) pueda usar la
+ * identidad sin fabricar una peticion falsa.
+ */
+export function subDeCabecera(cookie: string | null): string | null {
+  if (cookie === null) return null;
+  const coincidencia = /(?:^|;)\s*frasapp_session=([^;\s]+)/.exec(cookie);
+  if (coincidencia === null) return null;
+  return subDeValor(coincidencia[1]);
+}
+
+/**
+ * El `sub` de la peticion, o `null` si no hay sesion.
+ *
+ * `null` significa una sola cosa: este handler no tiene identidad. El 401 que responda
+ * la ruta es de "sesion inexistente", no de "credenciales invalidas": no hay ninguna
+ * credencial que verificar todavia.
+ */
+export function subDeSesion(request: Request): string | null {
+  return subDeCabecera(request.headers.get("cookie"));
 }

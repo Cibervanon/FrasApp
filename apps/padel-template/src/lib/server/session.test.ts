@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { subDeSesion } from "./session";
+import { subDeCabecera, subDeSesion, subDeValor } from "./session";
 
 /**
  * T11: `subDeSesion` lee la identidad de la cookie `frasapp_session`.
@@ -80,5 +80,35 @@ describe("T11: la identidad sale de la cookie de sesion", () => {
   it("un valor url-encoded de mas se limpia antes de leer", () => {
     const token = tokenCon(JSON.stringify({ sub: SUB }));
     expect(subDeSesion(peticionCon(`frasapp_session=${encodeURIComponent(token)}`))).toBe(SUB);
+  });
+});
+
+describe("T13: subDeCabecera lee la misma cookie sin fabricar una peticion", () => {
+  const token = tokenCon(JSON.stringify({ sub: SUB }));
+
+  it("una cabecera cruda con la cookie devuelve el sub", () => {
+    expect(subDeCabecera(`preferencias=oscuro; frasapp_session=${token}`)).toBe(SUB);
+  });
+
+  it("null o sin la cookie devuelve null", () => {
+    expect(subDeCabecera(null)).toBeNull();
+    expect(subDeCabecera("otra=snack")).toBeNull();
+  });
+
+  it("un valor url-encoded de mas se limpia antes de leer", () => {
+    expect(subDeCabecera(`frasapp_session=${encodeURIComponent(token)}`)).toBe(SUB);
+  });
+});
+
+describe("T13: subDeValor lee el valor que devuelve next/headers.cookies()", () => {
+  const token = tokenCon(JSON.stringify({ sub: SUB }));
+
+  it("el valor desnombrado de la cookie devuelve el sub", () => {
+    expect(subDeValor(token)).toBe(SUB);
+  });
+
+  it("null o vacio devuelve null", () => {
+    expect(subDeValor(null)).toBeNull();
+    expect(subDeValor("")).toBeNull();
   });
 });
