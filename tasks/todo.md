@@ -279,7 +279,10 @@ franja que cruza medianoche, empate de prioridad, regla fuera de `valid_from/to`
 
 ---
 
-### [ ] T8: `computeRefund` con TDD `[TDD]`
+### [x] T8: `computeRefund` con TDD `[TDD]`
+**Hecho:** funcion pura con el tipo del dominio (`RefundInput`), 151 tests en `packages/core`,
+cobertura 100 % en `refund.ts`, guard de `boundaries` verde y `pnpm verify` completo. El draft
+inicial (`01bacf3`) quedo con el contrato equivocado y se corrigio en `d1faac1`.
 **Spec:** secciones 4.1 (`cancellation_policy`), 5.2, 7.6
 
 **Descripcion:** Motor de reembolso como funcion pura. Lee los tramos de
@@ -302,9 +305,9 @@ Devuelve tambien `tierHoursBefore` y `percentApplied` para auditarlo.
 ---
 
 ### Checkpoint 2
-- [ ] 100% de cobertura en `packages/core`
-- [ ] `resolvePrice` y `computeRefund` son puras. Verificable por grep
-- [ ] Todos los casos limite de la spec cubiertos
+- [x] 100% de cobertura en `packages/core`
+- [x] `resolvePrice` y `computeRefund` son puras. Verificable por grep
+- [x] Todos los casos limite de la spec cubiertos
 - [ ] **Revision humana antes de seguir**
 
 ---
@@ -312,6 +315,13 @@ Devuelve tambien `tierHoursBefore` y `percentApplied` para auditarlo.
 ## Fase 3: Reservas y pago
 
 ### [x] T9: Migracion `bookings` con EXCLUDE y limpieza perezosa `[TDD]` `[SEG]`
+**Hecho:** migracion `20260927000000_bookings.sql` y `bookings.db.test.ts` contra Postgres
+real: 46 tests nuevos, 176 en total, `pnpm verify` verde. Doble FK de tenant (`user_id` a
+`auth.users` y compuesta `(tenant_id, court_id)` a `courts`), 10 `check`, `EXCLUDE` con
+predicado, indice de lectura y limpieza perezosa por `hold_expires_at`.
+**Pendiente de produccion:** el `pg_cron` solo se programa si la extension esta
+disponible, y en el PostgreSQL local de Windows no lo esta, asi que el schedule de Supabase
+esta sin ejecutar en local. La via principal (limpieza perezosa de T11) si esta probada.
 **Spec:** secciones 4.4, 4.4.1, 7.4
 
 **Descripcion:** La tabla critica. `btree_gist`, `EXCLUDE` por `(tenant_id, court_id,

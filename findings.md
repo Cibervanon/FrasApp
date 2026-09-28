@@ -1055,3 +1055,60 @@ que es dato de `tenants` y no depende de Storage.
 
 Regla: **una ruta de fichero en la base sin su resolucion a URL es un dato que no existe.**
 Antes de pintar un `src`, decidir quien convierte la ruta en URL.
+
+## Un test que revierte por transaccion no puede probar dos filas que chocan
+
+`withTenant` abre una transaccion y la revierte SIEMPRE, incluso cuando el test pasa. Es lo
+que hace que los tests no se contaminen, y es correcto para todo lo que se prueba fila a
+fila. Pero rompe en silencio cualquier test de CONFLICTO entre dos filas: si el `INSERT` de
+la fila A esta en una llamada y el de la fila B en otra, la primera ya no existe cuando
+llega la segunda, y la restriccion no tiene nada que rechazar.
+
+En T9 eso era el `EXCLUDE`: los tres tests de solape pasaban con la restriccion BORRADA de
+la migracion, porque cada `insertBooking` habia revertido. Los dos inserts tienen que ir en
+la misma transaccion.
+
+Regla: **un test que prueba un conflicto entre dos filas mete los dos `INSERT` en la misma
+transaccion.** Y para saber si de verdad prueba algo, se tira la restriccion de la base ya
+montada (`alter table ... drop constraint ...`) y se mira que el test falla. Un test que
+sigue en verde sin la restriccion no es un test de la restriccion.
+
+## La FK de `user_id` no se hereda de la de `courts`
+
+La spec escribe `user_id references auth.users(id)` y el comentario que lo rodea justificaba
+la ausencia de `on delete cascade`. El DDL acabo siendo `user_id uuid not null` con un
+comentario de cuatro lineas sobre una FK que no existia, y un test de integridad lo
+destapo: una reserva con un socio inexistente insertaba sin problema.
+
+Regla: **la columna y su `references` van en la misma linea, y el comentario va DESPUES de
+la linea completa, no antes.** Un comentario que explica una restriccion no la crea; si
+alguien lee el comentario y no la linea, leera que la seguridad esta puesta cuando no lo
+esta.
+
+## El `EXCLUDE` con predicado es lo que hace que cancelar devuelva la pista
+
+Sin predicado, un `EXCLUDE` compuesto bloquea la ventana para SIEMPRE, porque la fila
+cancelada sigue estando. Un socio que cancela con dos semanas de antelacion seguia dejando
+su pista imposible de reservar para todo el dia, y la unica forma de recuperarla era que
+alguien editase la fila a mano en la base.
+
+Con `where (status in ('held','pending_payment','confirmed'))` el predicado decide, y los
+estados terminalmente cerrados (`cancelled`, `completed`, `no_show`, `expired`) dejan de
+contar. El predicado tiene que ser `IMMUTABLE`, asi que `now()` esta prohibido a proposito:
+la caducidad de los holds se resuelve con `expire_stale_holds` (una funcion que escribe) y
+no con un predicado (que solo puede leer). Los dos caminos que quedan son la lectura que
+filtra los caducados y el UPDATE que los limpia, y los dos estan probados.
+
+## `pg_cron` no viene en el PostgreSQL de Windows, y eso no se nota hasta T9
+
+T5 dejo escrito que habria que comprobarlo, y se comprobo al llegar T9: no esta en
+`pg_available_extensions` ni se puede instalar. Un `create extension if not exists pg_cron`
+a seco habria reventado el `db:reset` local con un error que no dice nada del problema
+real. La migracion lo comprueba primero y, si no esta, lo dice con `raise notice` y sigue,
+de forma que la misma migracion programa el schedule en Supabase sin ramas por entorno.
+
+Lo que queda sin probar es el schedule en si: **la migracion que lo crea no se ha ejecutado
+nunca en un entorno con `pg_cron`.** Es una asuncion, no una comprobacion, y hay que
+cerrarla en el primer entorno de Supabase antes de decir que la limpieza de holds caducados
+esta cubierta. La red de seguridad no es la via principal: la via principal es la limpieza
+perezosa dentro de la transaccion de T11, que si esta probada contra Postgres real.

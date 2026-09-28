@@ -9,11 +9,15 @@ producto: venta de plantilla de código y SaaS de marca blanca por instancia ais
 
 ## Next Step
 
-T6 cerrada (`88f4d6c`). Tarea siguiente: **T7** (precios y reserva: `resolvePrice`,
-`computeRefund` y el motor de disponibilidad que ya esta en T5b). Es la primera tarea
-`[TDD]` con logica de dinero, y la que habilita por fin el umbral automatico de cobertura
-que T0 dejo apagado. Antes de empezar, confirmar con el usuario el alcance de T7 y si
-`/pistas` ya puede llevar boton de reservar.
+T7 (`5ede9fb`), T8 (`d1faac1`) y T9 cerradas, y con ellas el Checkpoint 2 salvo la revision
+humana. Tarea siguiente: **T10** (test de concurrencia de holds, seccion 7.4). Es la red de
+proteccion de T9 probada antes de que exista el endpoint: dos intentos simultaneos sobre el
+mismo slot y **exactamente uno** gana. Ahora que el `EXCLUDE` esta en su forma final, es el
+momento de comprobar que aguanta la concurrencia de verdad y no solo en serie.
+
+Antes de empezar T10, dos cosas que dependen de decisiones tuyas: si la concurrencia se
+prueba con dos conexiones reales de Postgres (mas fiel, mas lento) o con dos transacciones
+simultaneas en el mismo pool, y si el endpoint de reserva de T11 entra ya en la misma tarea.
 
 ## Current Phase
 

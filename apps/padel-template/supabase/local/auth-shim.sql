@@ -150,12 +150,14 @@ comment on function auth.role() is
   'Shim local. En produccion la crea GoTrue. Ver cabecera del fichero.';
 
 -- El RLS se provee con `set local role authenticated`, no con un claim, asi que
--- esta tabla no se usa. Se deja solo para que un `GRANT` futuro de la app
--- reviente aqui en lugar de en produccion con un error de relacion inexistente.
+-- esta tabla no se usa para autenticar. Se crea porque `bookings.user_id` la referencia
+-- desde T9: en produccion la gestiona GoTrue, y sin esta tabla aqui la migracion de
+-- bookings no aplicaria. Los tests de T9 la siembran con `on conflict do nothing` para
+-- tener socios contra los que probar la FK.
 create table if not exists auth.users (
   id uuid primary key default gen_random_uuid(),
   email text unique
 );
 
 comment on table auth.users is
-  'Placeholder local. En produccion la gestiona GoTrue. No se usa en el MVP.';
+  'Placeholder local. En produccion la gestiona GoTrue. La referencia bookings.user_id (T9) es lo que la necesita.';

@@ -530,3 +530,90 @@ filtrar franjas sobre pistas de otro club aunque se intente.
 Sigue sin verificar si `pg_cron` esta disponible en el PostgreSQL nativo de Windows. No
 bloquea T5, pero decide T9: si no esta, los recordatorios de caducidad van en Edge
 Function y `EXCLUDE` sigue necesitando `btree_gist`, que esa si esta probada.
+
+Respuesta a T9: `pg_cron` NO esta disponible en el PostgreSQL nativo de Windows, ni
+siquiera instalable. La migracion lo comprueba con `pg_available_extensions` y, si no esta,
+lo dice con un `raise notice` y sigue. Ver la entrada de T9 mas abajo.
+
+## T7: motor de precio en `core` (cerrada, `5ede9fb`)
+
+`resolvePrice` en `packages/core/src/domain/pricing.ts`, pura: recibe `startsAt` como dato,
+resuelve por `court` > `court_type` > `global`, y desempata por `priority` y luego por
+`valid_from` mas reciente. Sin regla aplicable cae a `courts.base_price_cents` y NUNCA
+devuelve `null`. 135 tests, cobertura 100 % en el fichero, `pnpm verify` verde.
+
+El umbral automatico de cobertura que T0 dejo apagado ya esta en pie: `packages/core`
+exige 100 % por fichero en statements, branches, functions y lines.
+
+**Tiempo local, no UTC.** `startsAt` rechaza `Z` y `+02:00` a proposito, porque el club
+opera en su hora local y `franja = "18:00-20:00"` tiene que seguir significando las 18:00
+del local. Acepta segundos opcionales. Quien normalice a UTC antes de llamar (T12) pierde
+la tarde, y el importe que paga el socio no cuadra. La conversion a `timestamptz` es de T12.
+
+## T8: motor de reembolso en `core` (cerrada, `d1faac1`)
+
+`computeRefund` pura, con `RefundInput` del dominio y salida `RefundQuote` (importe mas el
+snapshot de `tierHoursBefore`, `percentApplied` y `label`). Ordena una COPIA de los tramos
+descendente por `hoursBefore` y aplica el primero que se cumple, con limites INCLUSIVOS
+(`>=`): 24h exactas dan 100 %, 12h exactas dan 50 %. Tramos por defecto 24/100, 12/50, 0/0.
+Sin tramo aplicable devuelve 0 con los tres campos en `null`. 151 tests en `packages/core`.
+
+El primer commit de T8 (`01bacf3`) se llevo con el contrato equivocado: tipo propio en
+snake_case, cinco tramos por defecto, sin ordenar y sin `RefundQuote`. Se corrigio entero
+en `d1faac1` en vez de amendar, para que el historial no diga que la version buena estaba
+ahi desde el principio.
+
+**El guard de `boundaries` es el que obliga a hacer las cosas bien.** Exige que cada
+modulo tenga un test que lo importe, y lo exige CON extension (`.js`). Un import sin
+extension no cuenta como import, asi que se quejaba de `refund.ts` sin tener un solo test.
+La solucion NO es excluir el fichero de la cobertura: es importar con `.js` desde el test.
+Excluirlo dejaba verde un modulo sin probar, que es justo lo que el guard existe para
+impedir.
+
+## T9: tabla `bookings` (cerrada)
+
+Migracion `20260927000000_bookings.sql` y `bookings.db.test.ts`: 46 tests nuevos, 176 en
+total, `pnpm verify` verde. `btree_gist`, `EXCLUDE` compuesto con predicado de estados
+vigentes, indice de lectura por pista, y `expire_stale_holds(tenant, court)` que caduca
+por `hold_expires_at` y devuelve cuantas filas toco.
+
+**La FK de `user_id` se me olvido al escribirla.** La declare `uuid not null` con un
+comentario larguisimo explicando por que NO lleva `on delete cascade`, y sin el
+`references auth.users(id)`. Lo solo vio el test de integridad: una reserva con un socio
+inexistente insertaba bien, porque no habia ninguna FK. El comentario describia una FK que
+no existia. Asi que un `not null` con su `references` se escribe en el MISMO sitio, nunca
+en la frase de arriba.
+
+**`comment on constraint` no admite el nombre con esquema.** Es error de sintaxis en el
+punto: la restriccion se identifica por (nombre, tabla) y el nombre va sin `public.`. Peor:
+el error lo senala en la linea del `comment`, que estaba mas de 200 lineas mas abajo, y el
+`db:reset` solo enseña el numero de linea.
+
+**`RAISE` de PL/pgSQL no concatena con `||`.** `raise exception 'a' || 'b'` no compila:
+la firma es `RAISE nivel 'formato', expr...`. O una cadena sola, o `raise exception '%',
+'a' || 'b'`.
+
+**Un `EXCLUDE` SI admite predicado.** El error que hizo descartarlo en el primer intento
+venia de meterlo dentro de un `create index`, que no es sintaxis. Como restriccion,
+`alter table ... add constraint ... exclude using gist (...) where (...)` funciona, y es
+la unica forma de que un estado cancelado deje de bloquear la pista.
+
+**`pg_cron` no esta en el PostgreSQL nativo de Windows.** No sale en
+`pg_available_extensions` ni instalable, asi que la migracion lo comprueba y, si no esta,
+avisa con `raise notice` y sigue. En Supabase la extension viene montada y el schedule se
+crea con la misma migracion. **Consecuencia que no hay que dejar sin registrar: el schedule
+de produccion no se ha ejecutado nunca.** La via principal es la limpieza perezosa de T11,
+que si esta probada; el cron es red de seguridad y hay que verlo funcionar en el primer
+entorno que tenga `pg_cron` antes de confiar en el.
+
+**Los tests tienen dientes, y se comprueba.** Con la base ya montada se tiraron el
+`EXCLUDE`, la FK compuesta y el indice, y `pnpm test:db` fallo exactamente en 6 tests, los
+6 que debian. Ese ejercicio destapo un agujero: el indice no lo cubria ningun test, asi que
+su ausencia no la rompia nada. Con el indice fuera, un test de solape que usara dos llamadas
+sueltas a `withTenant` pasaria IGUAL, porque cada llamada revierte y las dos reservas nunca
+coexisten. La primera version de estos tests hacia justo eso, y por eso los dos inserts de
+un caso de solape van ahora en la misma transaccion.
+
+**La trampa del `not null`.** En PostgreSQL 17 los `not null` no aparecen en
+`pg_constraint` y su mensaje de error no lleva nombre de restriccion, solo la columna. Es el
+unico assert del fichero que mira la columna en vez del nombre, y el propio test lo dice.
