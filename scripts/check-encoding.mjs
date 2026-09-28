@@ -51,8 +51,10 @@ const ROOT = resolve(import.meta.dirname, "..");
 /** Extensiones que se comprueban. El lockfile lo genera la herramienta, no se edita. */
 const EXTENSIONS = new Set([".ts", ".tsx", ".js", ".mjs", ".json", ".md", ".sql", ".toml", ".yml", ".yaml"]);
 
-/** Directorios que no son codigo nuestro. */
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", ".turbo", "coverage", ".turbo-cache"]);
+/** Directorios que no son codigo nuestro. `.claude` es la infraestructura del agente
+ * (skills del entorno, no el producto): hay que poder actualizarla desde GitNexus sin
+ * que tumbe el chequeo de encoding del proyecto. */
+const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", ".turbo", "coverage", ".turbo-cache", ".claude"]);
 
 /**
  * Caracteres NO ASCII que son legitimos en este repo. Lo que no este aqui se
