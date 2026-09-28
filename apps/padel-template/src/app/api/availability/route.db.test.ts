@@ -45,6 +45,12 @@ const PISTA_B = "00000000-0000-4000-8000-0000000005e3";
 const MIS_FICTS = [PISTA_A, PISTA_B];
 
 /**
+ * Un socio en `auth.users`, para las reservas del overlay de T11. La FK de bookings exige
+ * que el `user_id` exista, igual que en el POST de holds.
+ */
+const USUARIO_A = "00000000-0000-4000-8000-0000000005e4";
+
+/**
  * Zonas horarias de los tenants de este fichero.
  *
  * Europe/Madrid es la que usa el club de verdad y la que cambia de hora. America/Mexico_City
@@ -110,10 +116,42 @@ async function bloquear(
   });
 }
 
+/** Inserta una reserva (overlay de T11) para un dia local. `holdExpira` es SQL literal. */
+async function reservar(
+  courtId: string,
+  dia: string,
+  desde: string,
+  hasta: string,
+  status: string,
+  holdExpira: string | null = null,
+): Promise<void> {
+  const tenant = courtId === PISTA_A ? TENANT_A : TENANT_B;
+  const zona = courtId === PISTA_A ? ZONA_A : ZONA_B;
+  const holdExpiraSql =
+    status === "held" ? (holdExpira ?? "now() + interval '3 minutes'") : "null";
+  await withAdmin(async (db) => {
+    await db.query(
+      `insert into public.bookings
+         (tenant_id, court_id, user_id, starts_at, ends_at, status,
+          hold_expires_at, price_cents, price_breakdown, num_players,
+          player_name, is_minor)
+       values ($1, $2, $3,
+               ($4::timestamp at time zone $7),
+               ($5::timestamp at time zone $7),
+               $6, ${holdExpiraSql}, 1200, '[]', 4, 'Socio de T5d', false)`,
+      [tenant, courtId, USUARIO_A, `${dia} ${desde}`, `${dia} ${hasta}`, status, zona],
+    );
+  });
+}
+
 beforeAll(async () => {
   await prepareDatabase();
 
   await withAdmin(async (db) => {
+    await db.query(
+      `delete from public.bookings where court_id in (${placeholders(MIS_FICTS)})`,
+      [...MIS_FICTS],
+    );
     await db.query(
       `delete from public.court_blocks where court_id in (${placeholders(MIS_FICTS)})`,
       [...MIS_FICTS],
@@ -125,6 +163,7 @@ beforeAll(async () => {
       TENANT_A,
       TENANT_B,
     ]);
+    await db.query(`delete from auth.users where id = $1`, [USUARIO_A]);
 
     await db.query(
       `insert into public.tenants (id, name, slug, timezone)
@@ -140,6 +179,10 @@ beforeAll(async () => {
        ($2, $4, 'Pista T5d B', 'cristal', 1200, 1, 90, 60, 180)`,
       [PISTA_A, PISTA_B, TENANT_A, TENANT_B],
     );
+    await db.query(
+      `insert into auth.users (id, email) values ($1, 'socio-t5d@test') on conflict (id) do nothing`,
+      [USUARIO_A],
+    );
   });
 
   apuntarA(SLUG_A);
@@ -149,6 +192,10 @@ afterAll(async () => {
   delete process.env["TENANT_SLUG"];
   clearTenantCache();
   await withAdmin(async (db) => {
+    await db.query(
+      `delete from public.bookings where court_id in (${placeholders(MIS_FICTS)})`,
+      [...MIS_FICTS],
+    );
     await db.query(
       `delete from public.court_blocks where court_id in (${placeholders(MIS_FICTS)})`,
       [...MIS_FICTS],
@@ -160,6 +207,7 @@ afterAll(async () => {
       TENANT_A,
       TENANT_B,
     ]);
+    await db.query(`delete from auth.users where id = $1`, [USUARIO_A]);
   });
   await closePool();
   await releaseDatabaseLease();
@@ -297,6 +345,77 @@ describe("T5d: court_blocks como overlay", () => {
       `${DIA}T18:30`,
       `${DIA}T20:00`,
     ]);
+  });
+});
+
+describe("T11: el overlay de bookings activos (el motivo de la ruta de holds)", () => {
+  // ---------------------------------------------------------------------------------------
+  // LAS RESERVAS DE T11 SON TAMBIEN OVERLAY, Y EL PRECIO DE UNA PISTA ES UNO SOLO
+  //
+  // Un hold de 3 minutos TAPARIA el hueco exacto que una reserva confirmada y no tendria
+  // ningun sentido mostrarlo al socio; por eso el overlay de `bookings` se construyo con la
+  // MISMA consulta que ya filtraba `court_blocks`, con UNION ALL y el mismo recorte. Los
+  // estados: les descuentan el hueco a held (vivo), pending_payment y confirmed; un hold
+  // CADUCADO y una reserva CANCELLED ya no cuentan, si no los mas de un año del club
+  // estarian tapados.
+  //
+  // Mismos reglas que los court_blocks: una fecha distinta por test y limpieza en beforeAll
+  // (lineas 23 a 27 de junio, que ningun otro test de este fichero usa).
+  it("una reserva realizada como hold vigente esconde el slot", async () => {
+    // El hold vivo: 08:00-09:30 (hora de pared). Quita el primer slot y nada mas.
+    const DIA = "2026-06-23";
+    await reservar(PISTA_A, DIA, "08:00", "09:30", "held");
+    const resultado = await inicios(PISTA_A, DIA);
+    expect(resultado).not.toContain(`${DIA}T08:00`);
+    expect(resultado).toContain(`${DIA}T09:30`);
+    expect(resultado).toHaveLength(8);
+  });
+
+  it("un hold YA caducado no esconde el slot (la limpieza perezosa lo expira)", async () => {
+    // El hold nacio, vivio sus 3 minutos y murio: la pista vuelve a estar libre. Es la
+    // misma regla que `expire_stale_holds` y que el filtro `hold_expires_at > now()`.
+    const DIA = "2026-06-24";
+    await reservar(PISTA_A, DIA, "08:00", "09:30", "held", "now() - interval '1 minute'");
+    const resultado = await inicios(PISTA_A, DIA);
+    expect(resultado).toHaveLength(9);
+    expect(resultado[0]).toBe(`${DIA}T08:00`);
+  });
+
+  it("una reserva cancelada no esconde el slot", async () => {
+    const DIA = "2026-06-25";
+    await reservar(PISTA_A, DIA, "08:00", "09:30", "cancelled");
+    const resultado = await inicios(PISTA_A, DIA);
+    expect(resultado).toHaveLength(9);
+    expect(resultado[0]).toBe(`${DIA}T08:00`);
+  });
+
+  it("una reserva confirmada esconde el slot", async () => {
+    // 12:00-13:30 local: se lleva los slots de 11:00 (11:00-12:30) y 12:30 (12:30-14:00).
+    const DIA = "2026-06-26";
+    await reservar(PISTA_A, DIA, "12:00", "13:30", "confirmed");
+    const resultado = await inicios(PISTA_A, DIA);
+    expect(resultado).not.toContain(`${DIA}T11:00`);
+    expect(resultado).not.toContain(`${DIA}T12:30`);
+    expect(resultado).toContain(`${DIA}T14:00`);
+  });
+
+  it("una reserva pendiente de pago esconde el slot", async () => {
+    // En el flujo del club, pending_payment es el paso justo despues del hold: si estuviera
+    // libre, dos socios podrian llegar al mismo pago guiados por la misma rejilla.
+    const DIA = "2026-06-27";
+    await reservar(PISTA_A, DIA, "08:00", "09:30", "pending_payment");
+    const resultado = await inicios(PISTA_A, DIA);
+    expect(resultado).not.toContain(`${DIA}T08:00`);
+    expect(resultado).toHaveLength(8);
+  });
+
+  it("el hold de otro tenant no tapa NADA de este", async () => {
+    // Una reserva del club B con el mismo horario: la UNION ALL se limita a la pista que
+    // se esta consultando, y la RLS ya aisla a los clubs. Los 9 huecos se quedan.
+    const DIA = "2026-06-28";
+    await reservar(PISTA_B, DIA, "08:00", "09:30", "confirmed");
+    const resultado = await inicios(PISTA_A, DIA);
+    expect(resultado).toHaveLength(9);
   });
 });
 

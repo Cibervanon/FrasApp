@@ -376,17 +376,17 @@ caen 6 de los 9.
 
 ---
 
-### [ ] T11: Endpoints de hold `[TDD]`
+### [x] T11: Endpoints de hold `[TDD]`
 **Spec:** seccion 5.1, 7.4
 
 **Descripcion:** `POST /api/holds` (3 min exactos) y `DELETE /api/holds/[id]`. Limpieza
 perezosa dentro de la misma transaccion que el `INSERT`.
 
 **Criterios de aceptacion:**
-- [ ] El hold dura 3 min exactos
-- [ ] La limpieza perezosa se ejecuta **en la misma transaccion** que el insert
-- [ ] Solo puedes liberar tu propio hold. El de otro devuelve 404
-- [ ] 409 con horarios alternativos cuando hay conflicto
+- [x] El hold dura 3 min exactos
+- [x] La limpieza perezosa se ejecuta **en la misma transaccion** que el insert
+- [x] Solo puedes liberar tu propio hold. El de otro devuelve 404
+- [x] 409 con horarios alternativos cuando hay conflicto
 
 **Verificacion:** tests de endpoint · la suite de T10 sigue verde
 

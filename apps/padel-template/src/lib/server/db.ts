@@ -1,4 +1,4 @@
-import { Pool, type PoolConfig, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type PoolConfig, type QueryResult, type QueryResultRow } from "pg";
 
 /**
  * Acceso a la base desde el servidor, SIEMPRE con el rol del tenant.
@@ -112,35 +112,69 @@ export async function baseQuery<T extends QueryResultRow>(
 }
 
 /**
+ * Abre una transaccion con el rol del tenant y los claims que usara.
+ *
+ * Es la sesion de T4/T10, sacada de `tenantQuery` para poder reutilizarla en una transaccion
+ * de mas de una sentencia (T11) sin duplicar el baile de `begin` / `set local role` /
+ * `set_config`. No hace `commit` ni `rollback`: es solo la apertura, y quien la usa es
+ * responsable del final.
+ *
+ * El orden importa: primero el rol, despues los claims. Al reves, el `set_config` lo
+ * ejecutaria el superusuario y quedaria con los permisos de este, que es justo lo contrario
+ * de lo que se quiere.
+ */
+async function abrirSesionTenant(tenantId: string, sub: string | null): Promise<PoolClient> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query("set local role authenticated");
+    await client.query(`select set_config('request.jwt.claims', $1, true)`, [
+      JSON.stringify(claimsDe(tenantId, sub)),
+    ]);
+    return client;
+  } catch (error: unknown) {
+    client.release();
+    throw error;
+  }
+}
+
+/**
+ * Los claims del `request.jwt.claims`, con o sin identidad.
+ *
+ * Con `sub === null` el JSON es exactamente el de T4: `tenant_id` y `role`, y nada mas. Un
+ * visitante sin sesion no es una persona, y no se inventa un `sub` fabricado. Cuando una
+ * ruta autenticada pasa su `sub` real, se mezcla en los claims en `request.jwt.claims`, y
+ * `auth.uid()` ya devuelve una identidad dentro de la transaccion. Que el `sub` sea real es
+ * responsabilidad de quien llama: sale de `session.ts` (cookie de sesion, validada como
+ * uuid), y la verificacion criptografica del JWT se documenta alli como pendiente.
+ */
+function claimsDe(tenantId: string, sub: string | null): Record<string, string> {
+  if (sub === null) {
+    return { tenant_id: tenantId, role: "authenticated" };
+  }
+  return { tenant_id: tenantId, role: "authenticated", sub };
+}
+
+/**
  * Consulta CON el rol y el tenant del que se le pide.
  *
  * Este es el unico punto por el que un endpoint debe leer datos de negocio. La firma obliga
  * a pasar el `tenantId`, y como no hay forma de omitirlo, un handler nuevo no puede
  * acordarse de la RLS: si no lo pasa, no compila.
+ *
+ * El cuarto argumento, `sub`, es opcional de forma deliberada: la disponibilidad y el
+ * catalogo son publicos, y una consulta que no sea de alguien concreto no debe fabricar una
+ * identidad que no tiene. Cuando el `sub` importa (guardar quién pidio un hold), se le pasa
+ * el uuid de la sesion.
  */
 export async function tenantQuery<T extends QueryResultRow>(
   tenantId: string,
   sql: string,
   params: unknown[] = [],
+  sub: string | null = null,
 ): Promise<T[]> {
-  const client = await getPool().connect();
+  const client = await abrirSesionTenant(tenantId, sub);
   try {
-    await client.query("begin");
-    // El orden importa: primero el rol, despues los claims. Al reves, el
-    // `set_config` lo ejecutaria el superusuario y quedaria con los permisos de este, que
-    // es justo lo contrario de lo que se quiere.
-    await client.query("set local role authenticated");
-    await client.query(`select set_config('request.jwt.claims', $1, true)`, [
-      JSON.stringify({
-        tenant_id: tenantId,
-        role: "authenticated",
-        // SIN `sub`. Un visitante sin sesion no es una persona, y poner un `sub`
-        // inventado seria fabricar una identidad que un dia alguien podria usar para
-        // atribuir acciones. Cuando haga falta una sesion real, se mistura el `sub` de
-        // ahi, con el JWT que Supabase ya ha verificado.
-      }),
-    ]);
-
     const result = await client.query<T>(sql, params);
     await client.query("commit");
     return result.rows;
@@ -148,6 +182,51 @@ export async function tenantQuery<T extends QueryResultRow>(
     // Sin esto, una transaccion abortada se queda colgada en el pool: la siguiente que
     // coja esa conexion empieza en un estado de error y dice `transaccion abortada`, sin
     // relacion con nada de lo que este test hizo.
+    await client.query("rollback").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Lo que una funcion de transaccion puede hacer con la conexion: consultar, y nada mas. */
+export interface SesionQueryable {
+  query<R extends QueryResultRow>(sql: string, params?: unknown[]): Promise<QueryResult<R>>;
+}
+
+/**
+ * Una transaccion de MAS de una sentencia, con rol y tenant.
+ *
+ * Existe para T11, y solo para eso. La limpieza perezosa de holds expirados es un `update`
+ * + un `insert` en la misma transaccion: si se hicieran como dos `tenantQuery` separadas,
+ * una conexion las separaria en dos transacciones y el `update` podria no haber llegado a
+ * commit antes de que el `insert` saltara por la exclusion. No por casualidad, sino por
+ * diseno: un CTE con `update`+`insert` (la alternativa de una sola sentencia) se ejecuta con
+ * UN MISMO snapshot, y Postgres documenta que las sub-sentencias modificadoras no ven sus
+ * efectos mutuos sobre las tablas objetivo. Dos sentencias separadas en la misma
+ * transaccion, en Read Committed, si se ven: es por eso que este helper existe.
+ *
+ * La firma fuerza a pasar el `sub`. Es una ruta autenticada la que crea o libera un hold, y
+ * una conexion de escritura sin identidad podria fabricar filas de otros. Quien no tenga
+ * identidad no deberia estar aqui.
+ *
+ * Los errores vuelven a quien llama sin traducir (puede querer distinguir `23P01` de
+ * `23503`); la transaccion se revierte antes.
+ */
+export async function tenantSession<T>(
+  tenantId: string,
+  sub: string,
+  fn: (db: SesionQueryable) => Promise<T>,
+): Promise<T> {
+  const client = await abrirSesionTenant(tenantId, sub);
+  try {
+    const resultado = await fn({
+      query: <R extends QueryResultRow>(sql: string, params?: unknown[]) =>
+        client.query<R>(sql, params),
+    });
+    await client.query("commit");
+    return resultado;
+  } catch (error: unknown) {
     await client.query("rollback").catch(() => undefined);
     throw error;
   } finally {

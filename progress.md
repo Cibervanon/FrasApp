@@ -688,3 +688,50 @@ usarse, con consumidor previsto en T11.
 El índice de GitNexus quedó reindexado. FTS/BM25 sigue sin habilitar (falta la extensión de
 LadybugDB; pendiente para cuando haya red). Los 3 avisos de encoding que salen al verificar
 viven en `.claude/skills/` (set up de GitNexus), no son del código del proyecto.
+
+## T11: Endpoints de hold (cerrada)
+
+`POST /api/holds` y `DELETE /api/holds/[id]` con TDD contra Postgres real, más el overlay de
+`bookings` en `GET /api/availability`.
+
+**Verificación:** `pnpm verify` en verde salvo los 3 avisos de encoding de siempre en
+`.claude/skills/`. `check:encoding`, typecheck 7/7, lint 4/4, 25 unitarios (10 de `session`),
+**206 de integración** (12 ficheros; +6 overlay en availability, +15 holds), cobertura 100%
+en `core`, build de Next con las 3 rutas `/api/holds` nuevas.
+
+### Implementado
+
+- `src/lib/server/db.ts`: `tenantQuery` con `sub` opcional (cuarto parametro), `claimsDe`
+  idéntica para `sub === null` (preserva el assert `claims.sub` toBeUndefined de T5),
+  `tenantSession<T>` con `SesionQueryable`. Dos sentencias separadas en la misma transacción
+  en vez de CTE; motivo documentado en el código (las sub-sentencias de un CTE no se ven
+  entre sí: "cannot see one another's effects on the target tables").
+- `src/lib/server/session.ts`: `subDeSesion` lee la cookie `frasapp_session` (JWT de 3
+  partes, payload base64url, `sub` debe ser uuid). Sin firma verificada; decisión pendiente,
+  documentada. 10 unitarios.
+- `src/lib/server/validacion.ts`: `FORMATO_UUID`, `FORMATO_FECHA`, `esFechaReal`,
+  `FORMATO_INSTANTE_LOCAL`, `esInstanteLocal` (rechaza offset, `99:99` y `24:00`).
+- `src/lib/server/disponibilidad.ts`: `disponibilidadDePista` → `{ pista, huecos } | null`:
+  overlay de `court_blocks` UNION ALL `bookings` activos (`held`/`pending_payment`/
+  `confirmed` con `hold_expires_at > now()`), clip al día, ordenado.
+- `src/lib/server/holds.ts`: `crearHold` (pre-check de disponibilidad → `expire_stale_holds`
+  → `INSERT` con `hold_expires_at = now()+3 min`; 23P01→409 con alternativas frescas,
+  23503→401) y `liberarHold` (SELECT bajo RLS → 404 si ajeno/otro club/inexistente → UPDATE
+  a `cancelled`; 0 filas → 409).
+- Rutas `src/app/api/holds/route.ts` (201/400/401/404/409/500) y `[id]/route.ts` (params
+  como `Promise`, confirmado en docs de Next 16).
+
+### Errores de esta sesión (los tres de los tests, ninguno de la ruta)
+
+1. `delete from public.auth.users` → **0A000** ("referencias entre bases de datos"): un
+   nombre de tres partes se lee como `base.esquema.tabla`. Es `auth.users`.
+2. `extract(epoch ...)` → numeric → pg lo devuelve como string → `toBeGreaterThan` lanza.
+   Cast `::int` en el SQL.
+3. El assert del slot libre esperaba `08:00:00` y la ruta devuelve `2026-07-24T08:00`.
+
+### GitNexus
+
+Reindexado (1471 nodos, 2870 aristas, 57 clusters, 36 flows). `detect-changes`: risk high
+por diseño (`tenantQuery`/`claimsDe`/`abrirSesionTenant` son el eje único de aislamiento),
+14 flujos afectados (GET availability/courts, PistasPage, HomePage, CrearHold) y los 14
+verdes en test:db. Cambios aditivos, sin consumidor roto.

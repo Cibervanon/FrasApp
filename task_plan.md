@@ -9,21 +9,18 @@ producto: venta de plantilla de código y SaaS de marca blanca por instancia ais
 
 ## Next Step
 
-T7 (`5ede9fb`), T8 (`d1faac1`), T9 (`022d9b9`) y T10 cerradas, y con ellas el Checkpoint 2
-salvo la revision humana. Tarea siguiente: **T11**, los endpoints de hold (`POST /api/holds`
-y `DELETE /api/holds/[id]`), que es la primera vez que la reserva existe fuera de la base.
+T7 (`5ede9fb`), T8 (`d1faac1`), T9 (`022d9b9`), T10 y **T11 cerradas**. Tarea siguiente:
+**T12**, `pricing_rules` + disponibilidad con precio (`resolvePrice` resuelto en servidor,
+primer anclaje del precio en la API).
 
-Decisiones tomadas al ejecutar T10, sin esperar: dos conexiones reales de Postgres (la
-opcion mas fiel) y el endpoint fuera de T10. El 409 sigue sin probarse como HTTP, porque
-no hay endpoint; T10 comprueba que el conflicto lo decide la `EXCLUDE`, y T11 comprueba que
-se traduce en un 409 con horarios alternativos.
+Decisiones T11 ya tomadas y probadas (han dejado de estar abiertas): la limpieza perezosa
+usa `expire_stale_holds` EN LA MISMA transaccion del `INSERT` (dos sentencias separadas,
+no un CTE; probado "de la manga" en `route.db.test.ts`), y el overlay de `bookings` en
+`GET /api/availability` entro en T11 y esta probado en `route.db.test.ts` (6 casos nuevos).
 
-Dos cosas de T11 que dependen de decisiones tuyas, y que conviene tener claras antes de
-empezar: si la limpieza perezosa se hace con `expire_stale_holds` en la misma transaccion
-del `INSERT` (ya escrito y probado) o con un `DELETE` sobre los caducados, y si el overlay
-de `bookings` en `GET /api/availability` entra en T11 o en una tarea aparte. Ese overlay no
-lo pide ninguna tarea y es lo que impide que el 409 ofrezca alternativas que el propio
-endpoint de disponibilidad no muestra.
+Pendiente de decision de T12 (no bloquea, se decide al llegar): la cookie `frasapp_session`
+sigue sin firma verificada; el `sub` solo atribuye (FN a `auth.users` frena los uuid
+inventados). El gestor y el socio reales siguen por decidir en las tareas de UI.
 
 ## Current Phase
 

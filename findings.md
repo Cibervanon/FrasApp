@@ -1185,3 +1185,44 @@ Regla que sale de aquí: **una función pura con TDD y sin consumidor todavía e
 de seguridad que hay que probar por el camino público.** El 100% de cobertura no veía el
 export roto porque la cobertura se mide por módulo, y el módulo estaba bien; el índice
 público es un contrato aparte que necesita su propio test.
+
+## T11: Endpoints de hold (cerrada)
+
+### Decisiones de diseño ejecutadas
+
+- **La limpieza perezosa se probó "de la manga":** un hold se crea por HTTP con 3 minutos,
+  un `withAdmin` fuerza `hold_expires_at` al pasado, y el SEGUNDO POST al mismo hueco debe
+  responder 201. Es el único test que distingue las dos sentencias separadas en una
+  transacción (4.4.1) del CTE de una sola sentencia: si la implementación usara el CTE, el
+  `INSERT` no vería el `UPDATE` y el `EXCLUDE` devolvería un 409 que este test prohíbe.
+  Residuos verificados en la base: una fila `expired` y una `held` para el mismo hueco.
+- **El overlay de `bookings` en disponibilidad se probó dentro de T5d** porque el 409 de
+  holds debe coincidir con la rejilla: un slot que el overlay muestra libre pero que un
+  hold vigente tapa generaría un 409 que el socio no entiende. Los 6 casos nuevos usan
+  fechas propias (23–28 de junio) y un socio de T5d en `auth.users`.
+- Los 3 fallos al escribir los tests:
+  1. **`public.auth.users` es error `0A000`** ("referencias entre bases de datos"): un
+     nombre de tres partes se interpreta como `base.esquema.tabla`. El esquema `auth` ya
+     cualifica: `auth.users`, nunca `public.auth.users`.
+  2. **`extract(epoch from ...)` devuelve `numeric`, y `pg` lo serializa como string.**
+     Comparar con `toBeGreaterThan` lanza "actual value must be number or bigint,
+     received string". Cast en SQL: `extract(...)::int` (o `float8`) cuando se compara
+     numéricamente.
+  3. **La ruta de availability devuelve `startsAt` con fecha (`2026-07-24T08:00`), no
+     `08:00:00`.** Es el mismo formato que la API pide a los clientes; el assert lo
+     escribió mal el test, no la ruta.
+
+### El 404 del hold ajeno sigue la cita de T5d
+
+El criterio 7.1 pide el mismo cuerpo para "no existe" y "es de otro club". Para un hold de
+otro tenant, DELETE responde 404 con el cuerpo IDENTICO al de un uuid inventado, porque la
+RLS de `SQL_BUSCAR_HOLD` hace que el socio de A no vea la fila del club B. No hay 403 jamás.
+
+### `sub` sin firma (pendiente de decisión)
+
+`frasapp_session` es un JWT de tres partes SIN firma verificada: `session.ts` decodifica
+el payload, valida que `sub` sea uuid y nada más. La verificación completa queda pendiente
+de decisión (documentada en el propio fichero); el `sub` solo sirve para ATRIBUIR, porque
+`bookings.user_id` → FK a `auth.users` rechaza con 401 un uuid que no sea una persona. Un
+atacante puede suplantar la cookie, pero no reservar en otro club ni liberar el hold de
+otro socio.

@@ -1,7 +1,9 @@
-import { computeAvailability } from "@frasapp/core";
-import type { AvailabilityResult, TimeRange } from "@frasapp/core";
-
-import { tenantQuery } from "../../../lib/server/db";
+import {
+  esFechaReal,
+  FORMATO_FECHA,
+  FORMATO_UUID,
+} from "../../../lib/server/validacion";
+import { disponibilidadDePista } from "../../../lib/server/disponibilidad";
 import { resolveTenant } from "../../../lib/server/tenant";
 
 /**
@@ -39,6 +41,15 @@ import { resolveTenant } from "../../../lib/server/tenant";
  * La zona llega como PARAMETRO desde `resolveTenant()`. Nunca interpolada: un `$2` con
  * `'Europe/Madrid'; drop table` es un nombre de zona invalido y un error de Postgres, no
  * una sentencia.
+ *
+ * ---------------------------------------------------------------------------------------
+ * DONDE VIVE LA CONSULTA
+ *
+ * Esta ruta VALIDA la peticion y responde; los "ocupados" los calcula
+ * `disponibilidad.ts`, que es el unico sitio que conoce el SQL de bloques y reservas.
+ * Compartirlo con las alternativas del 409 de `POST /api/holds` es el motivo: ver el
+ * comentario de cabecera de `disponibilidad.ts`. Aqui queda la cabecera del problema de la zona
+ * horaria de arriba, que es la decision de diseño de T5d y no se mueve.
  *
  * ---------------------------------------------------------------------------------------
  * POR QUE LOS BLOQUES SE RECORTAN ANTES DE SALTAR A `computeAvailability`
@@ -83,94 +94,6 @@ export const dynamic = "force-dynamic";
 /** Sin cache, por el mismo motivo que en `/api/courts`. */
 const SIN_CACHE = "no-store";
 
-/** `YYYY-MM-DD`, y solo eso. Un formato mas laxo deja que "2026-3-2" sea un dia. */
-const FORMATO_FECHA = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Un uuid, en cualquier caja. Postgres lo aceptaria en minuscula o mayuscula. */
-const FORMATO_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** `YYYY-MM-DD` que ademas existe en el calendario. */
-function esFechaReal(fecha: string): boolean {
-  const partes = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fecha);
-  if (partes === null) return false;
-  const anio = Number(partes[1]);
-  const mes = Number(partes[2]);
-  const dia = Number(partes[3]);
-  // El calendario gregoriano no tiene meses 0 ni 13, y el dia depende del mes. El `Date` se
-  // construye en UTC a proposito: con la hora local, un servidor en una zona negativa puede
-  // leer el dia anterior y declarar valida una fecha que no lo es.
-  const fechaUtc = new Date(Date.UTC(anio, mes - 1, dia));
-  return (
-    fechaUtc.getUTCFullYear() === anio &&
-    fechaUtc.getUTCMonth() === mes - 1 &&
-    fechaUtc.getUTCDate() === dia
-  );
-}
-
-/**
- * La pista, por id. Lo que devuelve la RLS, y solo eso.
- *
- * Sin `tenant_id` en el `where`: el aislamiento lo pone la politica, como en `/api/courts`.
- * Una pista de otro club esta en la MISMA tabla, asi que la fila no sale de la base y esta
- * consulta no tiene forma de devolverla. De ahi que un `court_id` ajeno acabe en 404 y no en
- * 403: no hay ningun sitio en el codigo que sepa distinguir "no existe" de "es de otro".
- *
- * El `court_id` es `$1` y no `$2` porque `tenantQuery` NO antepone el tenant como parametro:
- * lo que hace es abrir la transaccion y cambiar el rol. La primera version de esta consulta
- * traia un `$2` de costumbre y Postgres respondia "no se pudo determinar el tipo del
- * parametro $1", que es su forma de decir que le estan pasando huecos de mas.
- */
-const SQL_PISTA = `
-select id, name, default_duration_min, min_duration_min, max_duration_min
-from public.courts
-where id = $1
-  and is_active
-  and deleted_at is null
-`;
-
-/**
- * Los bloques que solapan el dia local, recortados a ese dia y en hora de pared.
- *
- * El `cross join` con el CTE `dia` es lo que hace el trabajo: `inicio` y `fin` son los dos
- * extremos del dia EN LA ZONA DEL CLUB, ya convertidos a instante, y tanto el filtro de
- * solape como los dos recortes comparan contra ellos. Si el filtro fuera por fecha en UTC,
- * el dia limite seria un dia UTC, que es el bug de la cabecera.
- *
- * `order by starts_at, ends_at` no es cosmetico: `computeAvailability` avanza con un indice
- * que solo va hacia delante, y asume que los bloques llegan ordenados.
- */
-const SQL_BLOQUES = `
-with dia as (
-  select
-    ($3::date::timestamp at time zone $2) as inicio,
-    (($3::date::timestamp + interval '1 day') at time zone $2) as fin
-)
-select
-  to_char(greatest(b.starts_at, dia.inicio) at time zone $2, 'YYYY-MM-DD"T"HH24:MI')
-    as starts_at,
-  to_char(least(b.ends_at, dia.fin - interval '1 minute') at time zone $2, 'YYYY-MM-DD"T"HH24:MI')
-    as ends_at
-from public.court_blocks b
-cross join dia
-where b.court_id = $1
-  and b.starts_at < dia.fin
-  and b.ends_at > dia.inicio
-order by b.starts_at, b.ends_at
-`;
-
-interface PistaFila {
-  readonly id: string;
-  readonly name: string;
-  readonly default_duration_min: number;
-  readonly min_duration_min: number;
-  readonly max_duration_min: number;
-}
-
-interface BloqueFila {
-  readonly starts_at: string;
-  readonly ends_at: string;
-}
-
 /**
  * Un 404 que no dice cual de los dos fallos fue.
  *
@@ -196,11 +119,11 @@ function peticionInvalida(motivo: string): Response {
 export async function GET(request: Request): Promise<Response> {
   try {
     // `id:` porque `resolveTenant` devuelve `id`, y renombrarlo aqui deja claro que lo que
-    // viaja a `tenantQuery` es el id resuelto del despliegue. Escribiendo `{ tenantId }` a
-    // pelo, `tenantId` sale `undefined`, `JSON.stringify` se come la clave y los claims
-    // quedan sin `tenant_id`: la RLS no filtra, no deja ver. Todas las peticiones dan 404,
-    // tambien las de las pistas propias, que es un fallo que de entrada parece que el
-    // aislamiento funciona. El typecheck lo pilla antes que un test.
+    // viaja a `disponibilidadDePista` es el id resuelto del despliegue. Escribiendo
+    // `{ tenantId }` a pelo, `tenantId` sale `undefined` y la RLS no filtra, no deja ver:
+    // todas las peticiones darian 404, tambien las de las pistas propias, que es un fallo
+    // que de entrada parece que el aislamiento funciona. El typecheck lo pilla antes que
+    // un test.
     const { id: tenantId, timezone } = await resolveTenant();
     const url = new URL(request.url);
 
@@ -231,47 +154,24 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     // -----------------------------------------------------------------------------------
-    // LA PISTA, O 404
+    // LA PISTA Y SUS OCUPADOS, O 404
     //
-    // Se consulta antes que los bloques a proposito. Si la consulta de bloques fuera la
-    // primera, un `court_id` equivocado daria un array vacio, y un array vacio es una
-    // respuesta con la que T6 no puede hacer nada: no distingue "no hay pistas" de "no hay
-    // huecos" de "has escrito mal el id".
-    const pistas = await tenantQuery<PistaFila>(tenantId, SQL_PISTA, [courtId]);
-    const pista = pistas[0];
-    if (pista === undefined) {
+    // El 404 se decide ANTES de calcular los huecos a proposito. Si la consulta de ocupados
+    // fuera la primera, un `court_id` equivocado daria un array vacio, y un array vacio es
+    // una respuesta con la que T6 no puede hacer nada: no distingue "no hay pistas" de "no
+    // hay huecos" de "has escrito mal el id". Que pista existe y que la ocupa lo decide
+    // `disponibilidadDePista` en un solo sitio, y devuelve `null` cuando esa pista no
+    // existe aqui.
+    const resultado = await disponibilidadDePista(tenantId, timezone, courtId, fecha);
+    if (resultado === null) {
       return noExistePista();
     }
-
-    // -----------------------------------------------------------------------------------
-    // LOS BLOQUES, YA EN HORA DEL CLUB
-    const filas = await tenantQuery<BloqueFila>(tenantId, SQL_BLOQUES, [
-      courtId,
-      timezone,
-      fecha,
-    ]);
-    const occupied: TimeRange[] = filas.map((fila) => ({
-      startsAt: fila.starts_at,
-      endsAt: fila.ends_at,
-    }));
-
-    const resultado: AvailabilityResult = computeAvailability({
-      court: {
-        id: pista.id,
-        name: pista.name,
-        defaultDurationMin: pista.default_duration_min,
-        minDurationMin: pista.min_duration_min,
-        maxDurationMin: pista.max_duration_min,
-      },
-      date: fecha,
-      busy: occupied,
-    });
 
     // Lo que sale es exactamente lo que devuelve el motor, sin re-mapear. Los slots ya
     // vienen en hora de pared del club, que es lo que la T6 pintara tal cual, y anadirle
     // aqui un offset obligaria a decidir quien lo aplica, que es la pregunta que T7 tendra
     // que responder igual.
-    return Response.json(resultado, { headers: { "cache-control": SIN_CACHE } });
+    return Response.json(resultado.huecos, { headers: { "cache-control": SIN_CACHE } });
   } catch (error: unknown) {
     // El error COMPLETO al log, con su stack y su mensaje. A la respuesta, nada: el mensaje
     // de `resolveTenant` dice el slug y el nombre de la tabla, y quien lo lee puede ser un
