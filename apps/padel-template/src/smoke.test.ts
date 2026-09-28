@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { tenantConfigSchema } from "@frasapp/config-schema";
+import { computeRefund, TRAMOS_POR_DEFECTO } from "@frasapp/core";
 import type { BookingStatus } from "@frasapp/core";
 
 /**
@@ -63,5 +64,19 @@ describe("app: consumo de los packages del monorepo", () => {
     // que valida esto. El test documenta que la dependencia existe.
     const status: BookingStatus = "held";
     expect(status).toBe("held");
+  });
+
+  it("resuelve la logica de reembolso de @frasapp/core en runtime", () => {
+    // Este test existe porque `computeRefund` y `TRAMOS_POR_DEFECTO` viven en
+    // `domain/refund.ts`, que index.ts NO reexportaba: el import compilaba y el
+    // typecheck no se quejaba de nada (porque en TS los simbolos desaparecen) pero
+    // en runtime la app recibia `undefined`. Si alguien vuelve a tocar la lista de
+    // exports de `@frasapp/core` y deja `refund.js` fuera, esto explota en el gate.
+    const quote = computeRefund({
+      priceCents: 2500,
+      hoursBefore: 20,
+      policy: { tiers: TRAMOS_POR_DEFECTO, policyText: "p", noticeText: "n" },
+    });
+    expect(quote.refundCents).toBe(1250);
   });
 });

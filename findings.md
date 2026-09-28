@@ -1135,3 +1135,53 @@ que comparte base con otro tiene que usar rangos de ids que no solapen. Un id co
 convierte un fallo de un test en decenas de fallos del otro, y el sintoma (una restriccion
 que el test no probaba) apunta al innocent. Por eso el barrido va en un `afterEach` por
 ventana y no al final del cuerpo del test.
+
+## Auditoría de arquitectura con GitNexus: un export roto en `core` que nadie veía (2026-09-28)
+
+Auditoría completa del repo con GitNexus (1234 nodos, 2293 aristas, 46 clusters, 16 flows)
+después de T10. Lo que salió, por severidad:
+
+1. **CRITICO (latente): `index.ts` de `@frasapp/core` no re-exportaba `domain/refund.js`.**
+   `computeRefund` (T8) y `TRAMOS_POR_DEFECTO` existían, al 100% de cobertura, testeables
+   dentro del paquete, e **inalcanzables desde la app**: el `exports` de `core` solo expone
+   `.`, así que un `import { computeRefund } from "@frasapp/core"` resolvía a `undefined` en
+   runtime. El typecheck sólo lo pilla si alguien importa el símbolo (TS2305), y nadie lo
+   importaba aún — el fallo habría aterrizado en T14b, el día que el endpoint de cancelación
+   se cableara al motor. Verificado empíricamente con un test temporal: recibía `undefined`
+   donde esperaba una función.
+
+   **Por qué no lo vio nada:** `smoke.test.ts` de T0 prueba que los tres paquetes se
+   resuelven en runtime, pero con `tenantConfigSchema` y `BookingStatus`, que `index.ts` sí
+   re-exportaba. No hay ningún guard que compruebe que la lista de `export *` de `index.ts`
+   cubre todos los módulos de `domain/` — `boundaries.test.ts` comprueba que cada módulo lo
+   importe al menos un test, pero el test puede importarlo por ruta relativa
+   (`./refund.js`) sin pasar por el índice público.
+
+   **Arreglo:** `export * from "./domain/refund.js";` en `index.ts` + un caso nuevo en
+   `smoke.test.ts` que importa `computeRefund` desde `@frasapp/core` y lo ejecuta, para que
+   un futuro cambio de la lista de exports explote en el gate y no en producción.
+
+2. **MODERADO: `pg` vivía en `devDependencies` de la app.** `src/lib/server/db.ts` lo
+   importa en runtime de producción; con `--omit=dev` (o npm ci de producción) el
+   despliegue rompería. Movido a `dependencies`.
+
+3. **COHERENCIA: dos constantes de reembolso nadie las mantiene sincronizadas.**
+   `TRAMOS_POR_DEFECTO` (refund.ts) y `DEFAULT_REFUND_TIERS` (validation.ts) son idénticas
+   en valor, cada una con su propio test fijando sus literales, y **ningún test las
+   comparaba entre sí** — pese al comentario de refund.ts que afirmaba que "el test que fija
+   el default garantiza que el seed y el motor no se desincronizan". Ese test sólo fijaba la
+   constante contra su propio literal. Añadido un test cruzado que las compara, y corregido
+   el comentario para que diga la verdad.
+
+4. **Config muerta:** `NEXT_PUBLIC_APP_URL` definida en `next.config.ts` sin un solo lector
+   en todo el repo. Eliminada.
+
+Qué salió limpio: 0 imports circulares; sin huérfanos en el grafo; `tenantQuery`/
+`resolveTenant` son CRITICAL *por diseño* (punto único de aislamiento RLS, que es la
+arquitectura decidida en T5, no un defecto). `SlotGrid` es un export sin uso con consumidor
+previsto en T11 — no es código muerto, es adelantado.
+
+Regla que sale de aquí: **una función pura con TDD y sin consumidor todavía es un vínculo
+de seguridad que hay que probar por el camino público.** El 100% de cobertura no veía el
+export roto porque la cobertura se mide por módulo, y el módulo estaba bien; el índice
+público es un contrato aparte que necesita su propio test.

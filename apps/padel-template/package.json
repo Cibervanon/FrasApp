@@ -20,6 +20,7 @@
     "@frasapp/core": "workspace:*",
     "@frasapp/ui": "workspace:*",
     "next": "16.3.6",
+    "pg": "8.16.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "4.6.5"
@@ -34,7 +35,6 @@
     "dotenv": "17.2.4",
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.6",
-    "pg": "8.16.3",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
     "vitest": "5.0.2"

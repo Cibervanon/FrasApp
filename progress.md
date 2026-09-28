@@ -664,3 +664,27 @@ misma fila. Ese caso esta probado, y comprueba que al final hay un solo hold vig
 **Lo que T10 NO prueba:** el 409 como HTTP, porque el endpoint es de T11. aqui se comprueba
 que el conflicto lo decide la `EXCLUDE` en la base. Tampoco el `pg_cron`, que no existe en
 este PostgreSQL.
+
+## Auditoría de arquitectura con GitNexus (2026-09-28)
+
+Auditoría del repo entero (reindex 1234 nodos, 2293 aristas, 46 clusters, 16 flows) con el
+CLI de GitNexus + verificación a mano de cada hallazgo. Se aplicaron 4 arreglos, todos con
+`pnpm verify` completo en verde (encoding, typecheck, lint, 167 tests unitarios, 185 de
+integración, build). `detect-changes`: risk low, 0 procesos afectados.
+
+1. **Crítico: `index.ts` de `@frasapp/core` no exportaba `domain/refund.js`.** `computeRefund`
+   era inalcanzable desde la app (el `exports` del paquete solo expone `.`), verificado
+   empíricamente con `undefined` en runtime. Añadido el export + un caso nuevo en
+   `smoke.test.ts` que lo importa por el camino público y lo ejecuta.
+2. **`pg` movido de `devDependencies` a `dependencies`** de la app (lo importa el runtime).
+3. **Test cruzado `TRAMOS_POR_DEFECTO` vs `DEFAULT_REFUND_TIERS`** en `refund.test.ts`, y
+   corregido el comentario que prometía una sincronía que ningún test garantizaba.
+4. **`NEXT_PUBLIC_APP_URL` eliminado de `next.config.ts`** (sin lectores en el repo).
+
+Limpio: 0 imports circulares, sin huérfanos en el grafo; `tenantQuery`/`resolveTenant`
+siguen siendo el punto único de aislamiento RLS, por diseño de T5. `SlotGrid` sigue sin
+usarse, con consumidor previsto en T11.
+
+El índice de GitNexus quedó reindexado. FTS/BM25 sigue sin habilitar (falta la extensión de
+LadybugDB; pendiente para cuando haya red). Los 3 avisos de encoding que salen al verificar
+viven en `.claude/skills/` (set up de GitNexus), no son del código del proyecto.

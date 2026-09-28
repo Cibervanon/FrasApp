@@ -209,3 +209,21 @@ describe("computeRefund: el default y el seed no se desincronizan", () => {
     }
   });
 });
+
+describe("el default del motor y el de la seed dicen lo mismo", () => {
+  /**
+   * Este describe existe por una mentira en los comentarios: refund.ts decia que "el
+   * test que fija el default garantiza que el seed y el motor no se desincronizan",
+   * pero ese test solo fija los MISMO literales que la constante, no compara las dos
+   * constantes entre si. La comparacion de verdad es esta: `DEFAULT_REFUND_TIERS`
+   * vive en validation.ts (va a la seed y al panel), `TRAMOS_POR_DEFECTO` vive en
+   * refund.ts (lo usa el motor cuando no hay politica). Si se tocan por separado, la
+   * pantalla del socio le dice que le devuelven un 50% por una politica que el motor
+   * interpreta con otro tramo. Que se lean igual de memoria y con los mismos valores
+   * es el contrato.
+   */
+  it("los tramos son los mismos en los dos sitios", async () => {
+    const { DEFAULT_REFUND_TIERS } = await import("./validation.js");
+    expect(DEFAULT_REFUND_TIERS).toEqual(TRAMOS_POR_DEFECTO);
+  });
+});

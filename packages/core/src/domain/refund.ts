@@ -35,8 +35,9 @@ import type { CancellationPolicy, RefundQuote } from "./types.js";
  *
  * Los labels son los que ve el socio al cancelar. Estan aqui Y en el seed por la misma
  * razon que el motor es puro: un tenant sin politica definida en la base usa estos, y
- * el test que fija el default es el que garantiza que el seed y el motor no se
- * desincronizan.
+ * el test `el default del motor y el de la seed dicen lo mismo` de refund.test.ts
+ * compara esta constante con `DEFAULT_REFUND_TIERS` de validation.ts para que un
+ * cambio en una falle si no se hace en la otra.
  */
 export const TRAMOS_POR_DEFECTO: CancellationPolicy["tiers"] = [
   { hoursBefore: 24, refundPercent: 100, label: "Cancelacion gratuita hasta 24h antes" },
