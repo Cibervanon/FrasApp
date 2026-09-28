@@ -25,6 +25,7 @@ import { manejarWebhook } from "./webhook/route";
 
 const TENANT_T13 = "00000000-0000-4000-8000-0000000006b0";
 const SLUG_T13 = "club-t13-a";
+const COURT_T13 = "00000000-0000-4000-8000-0000000006b5";
 
 const GESTOR = "00000000-0000-4000-8000-0000000006b1";
 const NO_GESTOR = "00000000-0000-4000-8000-0000000006b2";
@@ -117,6 +118,7 @@ function peticionWebhook(cuerpo: string, firma: string | null): Request {
 
 afterAll(async () => {
   await withAdmin(async (db) => {
+    await db.query(`delete from public.bookings where tenant_id = $1`, [TENANT_T13]);
     await db.query(`delete from public.tenants where id = $1`, [TENANT_T13]);
     await db.query(`delete from auth.users where id = any($1::uuid[])`, [[GESTOR, NO_GESTOR]]);
   });
@@ -147,6 +149,12 @@ beforeAll(async () => {
        values ($1, $2, 'gestor')
        on conflict (tenant_id, user_id) do nothing`,
       [TENANT_T13, GESTOR],
+    );
+    await db.query(
+      `insert into public.courts (id, tenant_id, name, court_type, base_price_cents)
+       values ($1, $2, 'Pista T13', 'cristal', 1200)
+       on conflict (id) do nothing`,
+      [COURT_T13, TENANT_T13],
     );
   });
   // La ruta lee el secreto y `NEXT_PUBLIC_APP_URL` de process.env en cada peticion:
@@ -347,3 +355,295 @@ describe("T13: POST /api/stripe/webhook", () => {
     expect(cliente.obtenerCuenta).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * T14 E3 (spec t14-payment-intent.md, casos 17-25): las ramas `payment_intent.*` del
+ * webhook.
+ *
+ * La firma y el bind por `stripe_payment_intent_id` se prueban contra Postgres REAL: el
+ * indice unico de E1 garantiza que un intent tiene a lo sumo una fila, y la idempotencia
+ * por estado (T14-F) se mide reenviando el MISMO `event.id` y comprobando que solo el
+ * primer pase escribe `confirmed_at` / `cancelled_at`.
+ */
+
+/** Un "booking de cobro" del tenant T13, en el estado de pago que diga el caso. */
+interface FilaE3 {
+  readonly id: string;
+  readonly intent: string;
+  readonly status: "pending_payment" | "confirmed" | "cancelled";
+  readonly paymentStatus: "unpaid" | "paid" | null;
+  readonly dia: number;
+}
+
+function sembrarCobro(fila: FilaE3): Promise<void> {
+  return withAdmin(async (db) => {
+    const inicio = new Date(Date.UTC(2026, 11, fila.dia, 18, 0));
+    const fin = new Date(inicio.getTime() + 90 * 60_000);
+    await db.query(
+      `insert into public.bookings
+         (id, tenant_id, court_id, user_id,
+          starts_at, ends_at, status, hold_expires_at,
+          price_cents, currency, price_breakdown, num_players, player_name,
+          stripe_payment_intent_id, payment_status)
+       values
+         ($1, $2, $3, $4,
+          $5, $6, $7, null,
+          2400, 'eur', '{"regla":"base","total_cents":2400}', 4, 'Socio de T14',
+          $8, $9)`,
+      [
+        fila.id,
+        TENANT_T13,
+        COURT_T13,
+        GESTOR,
+        inicio.toISOString(),
+        fin.toISOString(),
+        fila.status,
+        fila.intent,
+        fila.paymentStatus,
+      ],
+    );
+  });
+}
+
+function filaDeBooking(id: string) {
+  return withAdmin(async (db) => {
+    const filas = await db.query<{
+      status: string;
+      payment_status: string | null;
+      confirmed_at: string | null;
+      cancelled_at: string | null;
+      hold_expires_at: string | null;
+    }>(
+      `select status, payment_status, confirmed_at, cancelled_at, hold_expires_at
+         from public.bookings where id = $1`,
+      [id],
+    );
+    return filas.rows[0];
+  });
+}
+
+function intentEvento(evento: {
+  id: string;
+  type: "payment_intent.succeeded" | "payment_intent.payment_failed" | "payment_intent.amount_capturable_updated";
+  intent: string;
+}) {
+  return eventoFirmado({
+    id: evento.id,
+    type: evento.type,
+    data: { object: { id: evento.intent } },
+  });
+}
+
+describe("T14 E3: webhook de payment_intent.succeeded / payment_failed", () => {
+  it("succeeded desde pending_payment: confirmed + paid + confirmed_at", async () => {
+    await sembrarCobro({
+      id: bookingT13(17),
+      intent: "pi_e3_17",
+      status: "pending_payment",
+      paymentStatus: "unpaid",
+      dia: 17,
+    });
+    const { cuerpo, firma } = intentEvento({
+      id: "evt_17",
+      type: "payment_intent.succeeded",
+      intent: "pi_e3_17",
+    });
+
+    const respuesta = await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+
+    expect(respuesta.status).toBe(200);
+    const fila = await filaDeBooking(bookingT13(17));
+    expect(fila?.status).toBe("confirmed");
+    expect(fila?.payment_status).toBe("paid");
+    expect(fila?.confirmed_at).not.toBeNull();
+  });
+
+  it("el MISMO event.id succeeded 3 veces: UN solo efecto y confirmed_at estable", async () => {
+    await sembrarCobro({
+      id: bookingT13(18),
+      intent: "pi_e3_18",
+      status: "pending_payment",
+      paymentStatus: "unpaid",
+      dia: 18,
+    });
+    for (const vez of [1, 2, 3]) {
+      const { cuerpo, firma } = intentEvento({
+        id: "evt_18_replay",
+        type: "payment_intent.succeeded",
+        intent: "pi_e3_18",
+      });
+      const respuesta = await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+      expect(respuesta.status).toBe(200);
+      if (vez === 1) continue;
+    }
+
+    const fila = await filaDeBooking(bookingT13(18));
+    expect(fila?.status).toBe("confirmed");
+    expect(fila?.payment_status).toBe("paid");
+
+    const marca = fila?.confirmed_at ?? null;
+    const segunda = await filaDeBooking(bookingT13(18));
+    expect(segunda?.confirmed_at).toEqual(marca);
+  });
+
+  it("succeeded sin booking por ese intent: 200 ack y no crea nada", async () => {
+    const { cuerpo, firma } = intentEvento({
+      id: "evt_19",
+      type: "payment_intent.succeeded",
+      intent: "pi_e3_19_inexistente",
+    });
+
+    const respuesta = await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+
+    expect(respuesta.status).toBe(200);
+    const fila = await withAdmin((db) =>
+      db.query<{ uno: number }>(
+        `select 1 as uno from public.bookings where stripe_payment_intent_id = $1`,
+        ["pi_e3_19_inexistente"],
+      ),
+    );
+    expect(fila.rows.length).toBe(0);
+  });
+
+  it("succeeded sobre un booking cancelado: no resucita, queda cancelled", async () => {
+    await sembrarCobro({
+      id: bookingT13(20),
+      intent: "pi_e3_20",
+      status: "cancelled",
+      paymentStatus: null,
+      dia: 20,
+    });
+    const { cuerpo, firma } = intentEvento({
+      id: "evt_20",
+      type: "payment_intent.succeeded",
+      intent: "pi_e3_20",
+    });
+
+    const respuesta = await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+
+    expect(respuesta.status).toBe(200);
+    const fila = await filaDeBooking(bookingT13(20));
+    expect(fila?.status).toBe("cancelled");
+    expect(fila?.payment_status).toBeNull();
+  });
+
+  it("payment_failed desde pending_payment: cancelled + cancelled_at, sigue unpaid", async () => {
+    await sembrarCobro({
+      id: bookingT13(21),
+      intent: "pi_e3_21",
+      status: "pending_payment",
+      paymentStatus: "unpaid",
+      dia: 21,
+    });
+    const { cuerpo, firma } = intentEvento({
+      id: "evt_21",
+      type: "payment_intent.payment_failed",
+      intent: "pi_e3_21",
+    });
+
+    const respuesta = await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+
+    expect(respuesta.status).toBe(200);
+    const fila = await filaDeBooking(bookingT13(21));
+    expect(fila?.status).toBe("cancelled");
+    expect(fila?.cancelled_at).not.toBeNull();
+    expect(fila?.payment_status).toBe("unpaid");
+  });
+
+  it("el MISMO event.id payment_failed 3 veces: UN solo efecto", async () => {
+    await sembrarCobro({
+      id: bookingT13(22),
+      intent: "pi_e3_22",
+      status: "pending_payment",
+      paymentStatus: "unpaid",
+      dia: 22,
+    });
+    for (let vez = 1; vez <= 3; vez++) {
+      const { cuerpo, firma } = intentEvento({
+        id: "evt_22_replay",
+        type: "payment_intent.payment_failed",
+        intent: "pi_e3_22",
+      });
+      const respuesta = await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+      expect(respuesta.status).toBe(200);
+    }
+
+    const fila = await filaDeBooking(bookingT13(22));
+    expect(fila?.status).toBe("cancelled");
+    const marca = fila?.cancelled_at ?? null;
+    const relectura = await filaDeBooking(bookingT13(22));
+    expect(relectura?.cancelled_at).toEqual(marca);
+  });
+
+  it("payment_failed sobre un booking ya confirmed: no toca nada", async () => {
+    await sembrarCobro({
+      id: bookingT13(23),
+      intent: "pi_e3_23",
+      status: "confirmed",
+      paymentStatus: "paid",
+      dia: 23,
+    });
+    const { cuerpo, firma } = intentEvento({
+      id: "evt_23",
+      type: "payment_intent.payment_failed",
+      intent: "pi_e3_23",
+    });
+
+    const respuesta = await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+
+    expect(respuesta.status).toBe(200);
+    const fila = await filaDeBooking(bookingT13(23));
+    expect(fila?.status).toBe("confirmed");
+    expect(fila?.payment_status).toBe("paid");
+  });
+
+  it("un payment_intent.* desconocido se ACK con 200 y sin efectos", async () => {
+    const { cuerpo, firma } = intentEvento({
+      id: "evt_24",
+      type: "payment_intent.amount_capturable_updated",
+      intent: "pi_e3_24",
+    });
+
+    const respuesta = await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+
+    expect(respuesta.status).toBe(200);
+  });
+
+  it("tras payment_failed el mismo slot vuelve a entrar: el EXCLUDE libero la pista", async () => {
+    await sembrarCobro({
+      id: bookingT13(25),
+      intent: "pi_e3_25",
+      status: "pending_payment",
+      paymentStatus: "unpaid",
+      dia: 25,
+    });
+    const { cuerpo, firma } = intentEvento({
+      id: "evt_25",
+      type: "payment_intent.payment_failed",
+      intent: "pi_e3_25",
+    });
+    await manejarWebhook(peticionWebhook(cuerpo, firma), clienteFalso());
+
+    const inicio = new Date(Date.UTC(2026, 11, 25, 18, 0));
+    const fin = new Date(inicio.getTime() + 90 * 60_000);
+    await expect(
+      withAdmin((db) =>
+        db.query(
+          `insert into public.bookings
+             (id, tenant_id, court_id, user_id, starts_at, ends_at,
+              status, hold_expires_at, price_cents, currency, price_breakdown,
+              num_players, player_name)
+           values
+             ($1, $2, $3, $4, $5, $6, 'held', now() + interval '3 minutes',
+              2400, 'eur', '{}', 4, 'Reemplazo de T14')`,
+          [bookingT13(99), TENANT_T13, COURT_T13, GESTOR, inicio.toISOString(), fin.toISOString()],
+        ),
+      ),
+    ).resolves.toBeDefined();
+  });
+});
+
+/** uuid determinista para los bookings del bloque E3. */
+function bookingT13(n: number): string {
+  return `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
+}
