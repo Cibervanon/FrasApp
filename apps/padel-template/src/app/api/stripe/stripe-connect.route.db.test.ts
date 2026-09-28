@@ -46,6 +46,16 @@ function clienteFalso(): StripeConnectClient & {
     crearCuentaExpress: vi.fn(async () => ({ id: "acct_falso_ruta" })),
     obtenerAccountLink: vi.fn(async () => "https://connect.stripe.com/setup/falso"),
     obtenerCuenta: vi.fn(async () => ({ chargesEnabled: true, payoutsEnabled: false })),
+    // Informes inertes: las rutas de T13 no los llaman, pero el contrato de Stripe
+    // Connect los exige desde T14-G y un fake del interfaz tiene que implementarlos.
+    crearPaymentIntent: vi.fn(async () => ({
+      paymentIntentId: "pi_falso_ruta",
+      clientSecret: "sk_secret_falso",
+    })),
+    recuperarPaymentIntent: vi.fn(async (id: string) => ({
+      paymentIntentId: id,
+      clientSecret: "sk_secret_falso",
+    })),
   };
 }
 

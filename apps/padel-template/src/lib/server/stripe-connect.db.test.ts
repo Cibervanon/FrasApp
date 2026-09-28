@@ -32,7 +32,7 @@ import {
 const SUB_A = "00000000-0000-4000-8000-0000000000f1";
 const SUB_B = "00000000-0000-4000-8000-0000000000f3";
 
-/** Cliente falso con los tres metodos del contrato; los contadores son de `vi.fn`. */
+/** Cliente falso con el contrato de T13+T14; los contadores son de `vi.fn`. */
 function clienteFalso(): StripeConnectClient & {
   crearCuentaExpress: ReturnType<typeof vi.fn>;
   obtenerCuenta: ReturnType<typeof vi.fn>;
@@ -41,6 +41,16 @@ function clienteFalso(): StripeConnectClient & {
     crearCuentaExpress: vi.fn(async () => ({ id: "acct_falso_t13" })),
     obtenerAccountLink: vi.fn(async () => "https://connect.stripe.com/setup/falso"),
     obtenerCuenta: vi.fn(async () => ({ chargesEnabled: true, payoutsEnabled: false })),
+    // Informes inertes: esGestor y sincronizarEstadoConnect no los llaman, pero el
+    // contrato los exige desde T14-G y un fake del interfaz tiene que implementarlos.
+    crearPaymentIntent: vi.fn(async () => ({
+      paymentIntentId: "pi_falso_t13",
+      clientSecret: "sk_falso_t13",
+    })),
+    recuperarPaymentIntent: vi.fn(async (id: string) => ({
+      paymentIntentId: id,
+      clientSecret: "sk_falso_t13",
+    })),
   };
 }
 

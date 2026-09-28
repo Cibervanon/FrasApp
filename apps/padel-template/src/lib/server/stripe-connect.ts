@@ -1,6 +1,8 @@
 import Stripe from "stripe";
 
-import { baseQuery, tenantQuery } from "./db";
+import type { BookingStatus } from "@frasapp/core";
+
+import { baseQuery, tenantQuery, tenantSession } from "./db";
 
 /**
  * Stripe Connect para T13 (spec t13-stripe-connect.md): cuenta Express, Account
@@ -40,6 +42,15 @@ export interface StripeConnectClient {
     chargesEnabled: boolean;
     payoutsEnabled: boolean;
   }>;
+  crearPaymentIntent(input: {
+    amountCents: number;
+    currency: string;
+    destination: string;
+    idempotencyKey: string;
+  }): Promise<{ paymentIntentId: string; clientSecret: string }>;
+  recuperarPaymentIntent(
+    paymentIntentId: string,
+  ): Promise<{ paymentIntentId: string; clientSecret: string }>;
 }
 
 /**
@@ -91,6 +102,43 @@ export function crearClienteStripe(): StripeConnectClient {
         chargesEnabled: cuenta.charges_enabled === true,
         payoutsEnabled: cuenta.payouts_enabled === true,
       };
+    },
+    crearPaymentIntent: async (input) => {
+      // La Idempotency-Key (tercer argumento de `create`) es la que garantiza que un
+      // reintento del MISMO POST no cree dos intents (T14-G): Stripe reusa el intent
+      // del primer intento cuando la clave se repite.
+      const intent = await stripe.paymentIntents.create(
+        {
+          amount: input.amountCents,
+          currency: input.currency,
+          // El dinero va DIRECTO al club: transfer_data apunta a la cuenta Connect, y
+          // sin `application_fee_amount` porque COMISION_PLATAFORMA_CENTS es 0 (T14-D).
+          // El anclaje de esa constante en el test impide que un fee se cuele aqui sin
+          // tocar antes la spec.
+          transfer_data: { destination: input.destination },
+          automatic_payment_methods: { enabled: true },
+        },
+        { idempotencyKey: input.idempotencyKey },
+      );
+      const secreto = intent.client_secret ?? null;
+      if (secreto === null) {
+        throw new Error(
+          "Stripe devolvio un PaymentIntent sin client_secret. Es una anomalia del " +
+            "SDK, no de la peticion.",
+        );
+      }
+      return { paymentIntentId: intent.id, clientSecret: secreto };
+    },
+    recuperarPaymentIntent: async (paymentIntentId) => {
+      const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      const secreto = intent.client_secret ?? null;
+      if (secreto === null) {
+        throw new Error(
+          "Stripe devolvio un PaymentIntent sin client_secret al recuperarlo. Es una " +
+            "anomalia del SDK, no de la peticion.",
+        );
+      }
+      return { paymentIntentId: intent.id, clientSecret: secreto };
     },
   };
 }
@@ -231,3 +279,167 @@ export async function esGestor(tenantId: string, sub: string): Promise<boolean> 
   );
   return filas.length > 0;
 }
+
+/**
+ * T14: cobrar un hold (spec t14-payment-intent.md).
+ *
+ * `POST /api/payments/intent` hace dos cosas ATOMICAS: transiciona el booking
+ * `held -> pending_payment` y crea el PaymentIntent cuyo `transfer_data.destination`
+ * es la cuenta Connect del club. La transicion y el intent son la misma operacion:
+ * no hay un `pending_payment` sin su intent (lo exige la restriccion de E1), y un
+ * intent sin su pending_payment es un cobro que ningun webhook podria confirmar.
+ */
+
+/** El PaymentIntent en el formato que consume la respuesta. */
+export interface PaymentIntentInfo {
+  readonly paymentIntentId: string;
+  readonly clientSecret: string;
+}
+
+/** Lo que puede salir de `cobrarHold`. La ruta traduce cada caso a un status. */
+export type CobroResultado =
+  | { readonly tipo: "cobro_iniciado"; readonly intent: PaymentIntentInfo }
+  | { readonly tipo: "cobro_recuperado"; readonly intent: PaymentIntentInfo }
+  | { readonly tipo: "ya_pagado"; readonly paymentIntentId: string | null }
+  | { readonly tipo: "sin_hold" }
+  | { readonly tipo: "hold_expirado" }
+  | { readonly tipo: "transicion_invalida" }
+  | { readonly tipo: "pagos_no_listos" };
+
+/**
+ * La capacidad de cobro del club, leida de `tenants`.
+ *
+ * Es la comprobacion de T14-C y va ANTES de llamar a Stripe: cobrar sin saber si el
+ * club puede cobrar es un error de diseno. La cuentas Express de Connect se habilitan
+ * por el webhook `account.updated` (T13), asi que `charges_enabled=false` es "los
+ * cobros estan configurandose todavia", no un fallo de Stripe.
+ */
+export async function capacidadCobroDelTenant(tenantId: string): Promise<{
+  readonly cuentaId: string | null;
+  readonly chargesEnabled: boolean;
+}> {
+  const filas = await baseQuery<{ cuenta: string | null; charges: boolean }>(
+    `select stripe_account_id as cuenta, stripe_charges_enabled as charges
+       from public.tenants where id = $1`,
+    [tenantId],
+  );
+  const fila = filas[0];
+  return { cuentaId: fila?.cuenta ?? null, chargesEnabled: fila?.charges ?? false };
+}
+
+/** El fragmento de `bookings` que el cobro necesita de la fila. */
+interface FilaCobro {
+  readonly id: string;
+  readonly user_id: string;
+  readonly status: BookingStatus;
+  readonly price_cents: number;
+  readonly currency: string;
+  readonly stripe_payment_intent_id: string | null;
+}
+
+/**
+ * Inicia (o recupera) el cobro de un hold propio.
+ *
+ * El orden es el de la spec: primero el intent (Stripe), luego la fila. Si la
+ * transicion pierde una carrera (el where `status = 'held'` no toca nada porque otro
+ * POST / el webhook ya movio la fila), se re-lee y se decide con el estado de verdad:
+ * recuperar el intent del ganador, devolver "ya pagado" si el webhook confirmo, o
+ * declarar la transicion invalida. La Idempotency-Key (el id del hold) es la que hace
+ * que un reintento del MISMO POST no cree un segundo intent: Stripe devuelve el del
+ * primer intento.
+ *
+ * El 404 ("inexistente", "de otro club", "de otro socio") se decide como en
+ * `liberarHold`: la RLS de `bookings` ya dejo fuera a los otros clubs, y aqui se
+ * compara el `sub` con el `user_id` de la fila para que el hold de otro socio sea como
+ * si no existiera.
+ *
+ * @throws si la base o Stripe fallan. La ruta convierte cualquier cosa que no sea un
+ *   caso de negocio en 500 generico.
+ */
+export async function cobrarHold(
+  client: StripeConnectClient,
+  tenantId: string,
+  sub: string,
+  holdId: string,
+): Promise<CobroResultado> {
+  const capacidad = await capacidadCobroDelTenant(tenantId);
+  if (capacidad.cuentaId === null || !capacidad.chargesEnabled) {
+    // CERO llamadas a Stripe en los casos 503: el fake las cuenta.
+    return { tipo: "pagos_no_listos" };
+  }
+
+  const cuentaId = capacidad.cuentaId;
+  return tenantSession(tenantId, sub, async (db) => {
+    const filas = await db.query<FilaCobro>(SQL_BUSCAR_COBRO, [holdId]);
+    const fila = filas.rows[0];
+    if (fila === undefined) {
+      return { tipo: "sin_hold" };
+    }
+    if (fila.user_id !== sub) {
+      return { tipo: "sin_hold" };
+    }
+
+    if (fila.status === "expired") {
+      return { tipo: "hold_expirado" };
+    }
+    if (fila.status === "confirmed") {
+      return { tipo: "ya_pagado", paymentIntentId: fila.stripe_payment_intent_id };
+    }
+    if (fila.status === "pending_payment") {
+      // La restriccion de E1 garantiza el intent; el aspecto de tipo no lo sabe.
+      if (fila.stripe_payment_intent_id === null) {
+        return { tipo: "transicion_invalida" };
+      }
+      const intent = await client.recuperarPaymentIntent(fila.stripe_payment_intent_id);
+      return { tipo: "cobro_recuperado", intent };
+    }
+    if (fila.status !== "held") {
+      return { tipo: "transicion_invalida" };
+    }
+
+    const intent = await client.crearPaymentIntent({
+      amountCents: fila.price_cents,
+      currency: fila.currency,
+      destination: cuentaId,
+      idempotencyKey: holdId,
+    });
+
+    const transicionadas = await db.query<{ uno: number }>(SQL_MARCAR_PENDIENTE, [
+      holdId,
+      intent.paymentIntentId,
+    ]);
+    if (transicionadas.rows.length > 0) {
+      return { tipo: "cobro_iniciado", intent };
+    }
+
+    // La carrera perdida: alguien movio el hold entre el select y este update. Se
+    // decide con el estado que hay EN SERIO, no con el que vimos arriba.
+    const actuales = await db.query<FilaCobro>(SQL_BUSCAR_COBRO, [holdId]);
+    const actual = actuales.rows[0];
+    if (actual?.status === "pending_payment" && actual.stripe_payment_intent_id !== null) {
+      const ganador = await client.recuperarPaymentIntent(actual.stripe_payment_intent_id);
+      return { tipo: "cobro_recuperado", intent: ganador };
+    }
+    if (actual?.status === "confirmed") {
+      return { tipo: "ya_pagado", paymentIntentId: actual.stripe_payment_intent_id };
+    }
+    return { tipo: "transicion_invalida" };
+  });
+}
+
+const SQL_BUSCAR_COBRO = `
+select id, user_id, status, price_cents, currency, stripe_payment_intent_id
+from public.bookings
+where id = $1
+`;
+
+const SQL_MARCAR_PENDIENTE = `
+update public.bookings
+   set status = 'pending_payment',
+       payment_status = 'unpaid',
+       hold_expires_at = null,
+       stripe_payment_intent_id = $2
+ where id = $1
+   and status = 'held'
+returning 1 as uno
+`;
