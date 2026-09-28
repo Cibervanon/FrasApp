@@ -1,8 +1,9 @@
 import { resolvePrice } from "@frasapp/core";
-import type { AvailabilityResult, BookingStatus, PriceLine } from "@frasapp/core";
+import type { BookingStatus, PriceLine } from "@frasapp/core";
 
 import { tenantSession } from "./db";
 import { disponibilidadDePista } from "./disponibilidad";
+import type { DisponibilidadConPrecio } from "./disponibilidad";
 
 /**
  * Crear y liberar holds: la cara de ESCRITURA del ciclo de vida de la spec 4.4.1.
@@ -73,7 +74,7 @@ export type CrearHoldResultado =
   | { readonly tipo: "creado"; readonly hold: HoldCreado }
   | { readonly tipo: "sin_pista" }
   | { readonly tipo: "sin_usuario" }
-  | { readonly tipo: "conflicto"; readonly alternativas: AvailabilityResult };
+  | { readonly tipo: "conflicto"; readonly alternativas: DisponibilidadConPrecio };
 
 /** Lo que puede salir de `liberarHold`. La ruta traduce cada caso a un status. */
 export type LiberarHoldResultado =
@@ -104,23 +105,24 @@ export async function crearHold(
   if (disponible === null) {
     return { tipo: "sin_pista" };
   }
-  const { pista, huecos } = disponible;
+  const { pista, huecos, reglas } = disponible;
 
   const huecoLibre = huecos.slots.some((slot) => slot.startsAt === input.startsAt);
   if (!huecoLibre) {
     return { tipo: "conflicto", alternativas: huecos };
   }
 
-  // El precio es SNAPSHOT y se resuelve ANTES del insert. Sin reglas hasta T12, asi que
-  // `rules: []` cae a `courts.base_price_cents`: el desglose sera la tarifa base, que es
-  // exactamente lo que el club cobra ahora. El cliente nunca manda un importe.
+  // El precio es SNAPSHOT y se resuelve ANTES del insert, con las reglas REALES del club
+  // (`disponibilidadDePista` las leyo ya, con la misma RLS). El socio pidio un slot que la
+  // grilla tenia a un precio; aqui se recalcula con SU numero de jugadores por si una
+  // tarifa es `player_multiplier`. El cliente nunca manda un importe.
   const quote = resolvePrice({
     court: {
       id: pista.id,
       courtType: pista.courtType,
       basePriceCents: pista.basePriceCents,
     },
-    rules: [],
+    rules: reglas,
     startsAt: input.startsAt,
     durationMin: pista.defaultDurationMin,
     numPlayers: input.numPlayers,

@@ -1,5 +1,12 @@
-import { computeAvailability } from "@frasapp/core";
-import type { AvailabilityResult, CourtType, TimeRange } from "@frasapp/core";
+import { computeAvailability, resolvePrice } from "@frasapp/core";
+import type {
+  AvailabilityResult,
+  AvailabilitySlot,
+  CourtType,
+  PriceLine,
+  PricingRule,
+  TimeRange,
+} from "@frasapp/core";
 
 import { tenantQuery } from "./db";
 
@@ -30,6 +37,16 @@ import { tenantQuery } from "./db";
  * puede depender de que la limpieza ya haya pasado, porque con un solo `expire_stale_holds`
  * por minuto (pg_cron) y una consulta entre medias, un hold caducado podria seguir tapando
  * horas que deberian estar libres.
+ *
+ * ---------------------------------------------------------------------------------------
+ * EL PRECIO, DESDE T12
+ *
+ * Cada hueco se enriquece con su precio ANTES de salir de aqui. Los dos consumidores
+ * (la grilla publica y el 409 del hold) ven el mismo numero, resuelto con las reglas
+ * REALES de la base y con `resolvePrice`. `playerMultiplier` usa `courts.num_players`
+ * como factor por defecto de la rejilla: el precio que el socio ve al elegir es el que
+ * COBRARIA un hold del mismo dia, y solo el hold (que conoce a la persona) afina con su
+ * propio `numPlayers`. Advertido en `findings.md`.
  */
 
 /** Lo que necesita una pista para calcular huecos y PRECIO. Es `Court` sin lo que sobra. */
@@ -41,12 +58,35 @@ export interface PistaConPrecio {
   readonly defaultDurationMin: number;
   readonly minDurationMin: number;
   readonly maxDurationMin: number;
+  /** Jugadores por defecto (la rejilla cobra con estos; un hold afina con los suyos). */
+  readonly numPlayers: number;
 }
 
-/** La pista y sus huecos, en un paquete: el que hace un hold necesita las dos cosas. */
+/**
+ * Un hueco reservable con su precio ya resuelto. Extiende el `AvailabilitySlot` puro del
+ * core: el motor de disponibilidad no sabe de precios (tipado del core, `types.ts`).
+ */
+export interface SlotConPrecio extends AvailabilitySlot {
+  readonly priceCents: number;
+  readonly priceBreakdown: readonly PriceLine[];
+}
+
+/**
+ * Lo que `disponibilidadDePista` produce: la disponibilidad del core, con cada slot
+ * enriquecido. `HuecosConPrecio` para no confundirlo con `AvailabilityResult`.
+ */
+export interface DisponibilidadConPrecio {
+  readonly courtId: string;
+  readonly date: string;
+  readonly slots: readonly SlotConPrecio[];
+}
+
+/** La pista, sus huecos con precio y las reglas que se usaron. */
 export interface DisponibilidadPista {
   readonly pista: PistaConPrecio;
-  readonly huecos: AvailabilityResult;
+  readonly huecos: DisponibilidadConPrecio;
+  /** Las reglas de precio del tenant, tal cual fueron leidas. Para resolver el hold. */
+  readonly reglas: PricingRule[];
 }
 
 /**
@@ -63,11 +103,40 @@ export interface DisponibilidadPista {
  */
 const SQL_PISTA = `
 select id, name, court_type, base_price_cents,
-       default_duration_min, min_duration_min, max_duration_min
+       default_duration_min, min_duration_min, max_duration_min,
+       num_players
 from public.courts
 where id = $1
   and is_active
   and deleted_at is null
+`;
+
+/**
+ * Las reglas de precio del tenant, en la forma EXACTA que espera `resolvePrice`.
+ *
+ * Tres conversiones en el `select`, las tres necesarias:
+ *
+ *   - `start_time` y `end_time` con `to_char(..., 'HH24:MI')`: la columna es `time` y
+ *     node-pg la devolveria como `HH:MM:SS` con segundos, y el motor quiere `HH:MM`.
+ *   - `valid_from` y `valid_to` con `to_char(..., 'YYYY-MM-DD')`: la columna es `date` y
+ *     node-pg la devolveria como objeto `Date` (la forma depende de la zona del proceso),
+ *     y el motor compara cadenas `YYYY-MM-DD`. `to_char(null, ...)` sigue siendo `null`,
+ *     que es exactamente el "sin limite" que maneja `vivaEn`.
+ *
+ * `day_of_week` (int4[]) llega como numeros, que es lo que `resolvePrice` espera. Sin
+ * `order by`: el motor COPIA y ordena la lista con sus propios criterios; el orden de la
+ * base nunca debe decidir un empate (ver `porCriterio` en `pricing.ts`).
+ */
+const SQL_REGLA = `
+select id, name, scope, court_type, court_id, day_of_week,
+       to_char(start_time, 'HH24:MI') as start_time,
+       to_char(end_time, 'HH24:MI') as end_time,
+       duration_min, price_cents, player_multiplier,
+       priority,
+       to_char(valid_from, 'YYYY-MM-DD') as valid_from,
+       to_char(valid_to, 'YYYY-MM-DD') as valid_to,
+       is_active
+from public.pricing_rules
 `;
 
 /**
@@ -128,11 +197,52 @@ interface PistaFila {
   readonly default_duration_min: number;
   readonly min_duration_min: number;
   readonly max_duration_min: number;
+  readonly num_players: number;
 }
 
 interface OcupadaFila {
   readonly starts_at: string;
   readonly ends_at: string;
+}
+
+/** Fila cruda de `pricing_rules`, tal y como sale de `SQL_REGLA`. */
+interface ReglaFila {
+  readonly id: string;
+  readonly name: string;
+  readonly scope: string;
+  readonly court_type: string | null;
+  readonly court_id: string | null;
+  readonly day_of_week: number[];
+  readonly start_time: string;
+  readonly end_time: string;
+  readonly duration_min: number;
+  readonly price_cents: number;
+  readonly player_multiplier: boolean;
+  readonly priority: number;
+  readonly valid_from: string | null;
+  readonly valid_to: string | null;
+  readonly is_active: boolean;
+}
+
+/** `SQL_REGLA` ya convirtio las horas y las fechas; aqui solo se afinan los tipos. */
+function filaARegla(fila: ReglaFila): PricingRule {
+  return {
+    id: fila.id,
+    name: fila.name,
+    scope: fila.scope as PricingRule["scope"],
+    courtType: fila.court_type as CourtType | null,
+    courtId: fila.court_id,
+    dayOfWeek: fila.day_of_week,
+    startTime: fila.start_time,
+    endTime: fila.end_time,
+    durationMin: fila.duration_min,
+    priceCents: fila.price_cents,
+    playerMultiplier: fila.player_multiplier,
+    priority: fila.priority,
+    validFrom: fila.valid_from,
+    validTo: fila.valid_to,
+    isActive: fila.is_active,
+  };
 }
 
 /**
@@ -154,11 +264,11 @@ export async function disponibilidadDePista(
     return null;
   }
 
-  const filas = await tenantQuery<OcupadaFila>(tenantId, SQL_OCUPADO, [
-    courtId,
-    timezone,
-    fecha,
+  const [filas, filasRegla] = await Promise.all([
+    tenantQuery<OcupadaFila>(tenantId, SQL_OCUPADO, [courtId, timezone, fecha]),
+    tenantQuery<ReglaFila>(tenantId, SQL_REGLA),
   ]);
+  const reglas = filasRegla.map(filaARegla);
   const busy: TimeRange[] = filas.map((fila) => ({
     startsAt: fila.starts_at,
     endsAt: fila.ends_at,
@@ -176,6 +286,28 @@ export async function disponibilidadDePista(
     busy,
   });
 
+  // El precio de la rejilla se resuelve con los jugadores por DEFECTO de la pista: es el
+  // numero que ve quien aun no se ha identificado. El hold (que conoce a la persona) lo
+  // recalcula con sus jugadores, y por eso `reglas` viaja en el paquete.
+  const slots: SlotConPrecio[] = huecos.slots.map((slot) => {
+    const quote = resolvePrice({
+      court: {
+        id: pista.id,
+        courtType: pista.court_type,
+        basePriceCents: pista.base_price_cents,
+      },
+      rules: reglas,
+      startsAt: slot.startsAt,
+      durationMin: pista.default_duration_min,
+      numPlayers: pista.num_players,
+    });
+    return {
+      ...slot,
+      priceCents: quote.totalCents,
+      priceBreakdown: quote.breakdown,
+    };
+  });
+
   return {
     pista: {
       id: pista.id,
@@ -185,7 +317,13 @@ export async function disponibilidadDePista(
       defaultDurationMin: pista.default_duration_min,
       minDurationMin: pista.min_duration_min,
       maxDurationMin: pista.max_duration_min,
+      numPlayers: pista.num_players,
     },
-    huecos,
+    huecos: {
+      courtId: huecos.courtId,
+      date: huecos.date,
+      slots,
+    },
+    reglas,
   };
 }

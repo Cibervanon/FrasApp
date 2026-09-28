@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { resolvePrice } from "@frasapp/core";
+import type { CourtType, PriceLine, PricingRule } from "@frasapp/core";
+
 import { GET } from "./route";
 import { closePool } from "../../../lib/server/db";
 import { clearTenantCache } from "../../../lib/server/tenant";
@@ -62,11 +65,16 @@ const USUARIO_A = "00000000-0000-4000-8000-0000000005e4";
 const ZONA_A = "Europe/Madrid";
 const ZONA_B = "America/Mexico_City";
 
-/** Cuerpo de la respuesta, tipado. */
+/** Cuerpo de la respuesta, tipado. Desde T12 cada slot lleva su precio. */
 interface AvailabilityJson {
   readonly courtId: string;
   readonly date: string;
-  readonly slots: ReadonlyArray<{ readonly startsAt: string; readonly endsAt: string }>;
+  readonly slots: ReadonlyArray<{
+    readonly startsAt: string;
+    readonly endsAt: string;
+    readonly priceCents: number;
+    readonly priceBreakdown: ReadonlyArray<{ readonly label: string; readonly cents: number }>;
+  }>;
 }
 
 async function pedir(url: string): Promise<Response> {
@@ -183,6 +191,41 @@ beforeAll(async () => {
       `insert into auth.users (id, email) values ($1, 'socio-t5d@test') on conflict (id) do nothing`,
       [USUARIO_A],
     );
+
+    // -------------------------------------------------------------------------------
+    // REGLAS DE T12, para que la grilla tenga tarifas que resolver de verdad.
+    //
+    // Cada comportamiento usa un DIA DISTINTO (por dia de la semana), igual que los
+    // bloques del overlay: las reglas sobreviven al test (withAdmin, sin rollback) y
+    // si dos grupos compartieran dia, una regla de un grupo descolocaria el slot del
+    // otro. El patron es el del T5d: un fixture que se pisotea necesita su propio hueco.
+    await db.query(`delete from public.pricing_rules where tenant_id = $1`, [TENANT_A]);
+    await db.query(
+      `insert into public.pricing_rules
+         (id, tenant_id, name, scope, court_type, court_id, day_of_week,
+          start_time, end_time, duration_min, price_cents, player_multiplier,
+          priority, valid_from, valid_to)
+       values
+         ('00000000-0000-4000-8000-0000000005e5', $1, 'Tarifa punta manana', 'global', null, null, '{1}',
+          '09:00', '12:00', 90, 2000, false, 0, null, null),
+         ('00000000-0000-4000-8000-0000000005e6', $1, 'Tarifa por jugador', 'global', null, null, '{2}',
+          '14:00', '16:30', 90, 1000, true, 0, null, null),
+         ('00000000-0000-4000-8000-0000000005e7', $1, 'Tarifa tipo cristal', 'court_type', 'cristal', null, '{3}',
+          '08:00', '22:00', 90, 1500, false, 0, null, null),
+         ('00000000-0000-4000-8000-0000000005e8', $1, 'Tarifa global punta', 'global', null, null, '{3}',
+          '08:00', '22:00', 90, 500, false, 99, null, null),
+         ('00000000-0000-4000-8000-0000000005e9', $1, 'Tarifa pista A', 'court', null, $2, '{4}',
+          '08:00', '22:00', 90, 1800, false, 0, null, null),
+         ('00000000-0000-4000-8000-0000000005ea', $1, 'Tarifa cristal jueves', 'court_type', 'cristal', null, '{4}',
+          '08:00', '22:00', 90, 1500, false, 0, null, null),
+         ('00000000-0000-4000-8000-0000000005ec', $1, 'Tarifa de sesenta minutos', 'global', null, null, '{6}',
+          '08:00', '22:00', 60, 999, false, 0, null, null),
+         ('00000000-0000-4000-8000-0000000005ed', $1, 'Tarifa antigua', 'global', null, null, '{1}',
+          '06:00', '22:00', 90, 777, false, 0, '2020-01-01', '2026-06-14'),
+         ('00000000-0000-4000-8000-0000000005ee', $1, 'Tarifa futura', 'global', null, null, '{1}',
+          '06:00', '22:00', 90, 888, false, 0, '2026-06-16', null)`,
+      [TENANT_A, PISTA_A],
+    );
   });
 
   apuntarA(SLUG_A);
@@ -246,10 +289,28 @@ describe("T5d: la rejilla de un dia normal", () => {
     }
   });
 
-  it("no devuelve ni tenant_id ni precio", async () => {
+  it("no devuelve ni tenant_id ni otros datos del club, y si el precio de cada slot", async () => {
     const cuerpo = await disponibilidad(PISTA_A, DIA);
     expect(Object.keys(cuerpo).sort()).toEqual(["courtId", "date", "slots"]);
-    expect(cuerpo.slots[0]).toMatchObject({ startsAt: `${DIA}T08:00`, endsAt: `${DIA}T09:30` });
+    // 08:00 un lunes no cae en ninguna tarifa de T12 (la de manana empieza en 09:00):
+    // el precio que se ve es la tarifa base de la pista.
+    const slot = cuerpo.slots.find((s) => s.startsAt === `${DIA}T08:00`);
+    expect(slot).toMatchObject({
+      startsAt: `${DIA}T08:00`,
+      endsAt: `${DIA}T09:30`,
+      priceCents: 1200,
+    });
+    // El desglose NO es decorativo: trae la etiqueta de lo que se le mostrara al socio.
+    expect(slot?.priceBreakdown).toEqual([{ label: "Tarifa base", cents: 1200 }]);
+    // Un slot no es una ventana del tenant: solo lo que el socio necesita para decidir.
+    for (const s of cuerpo.slots) {
+      expect(Object.keys(s).sort()).toEqual([
+        "endsAt",
+        "priceBreakdown",
+        "priceCents",
+        "startsAt",
+      ]);
+    }
   });
 });
 
@@ -575,6 +636,194 @@ describe("T5d: criterio 7.1, que aqui si es observable", () => {
       `/api/availability?court_id=${PISTA_A}&date=2026-06-17&tenant_id=no-es-un-uuid`,
     );
     expect(response.status).toBe(200);
+  });
+});
+
+/** Fila de `pricing_rules`, como la leeria la propia disponibilidad. */
+interface ReglaFila {
+  readonly id: string;
+  readonly name: string;
+  readonly scope: string;
+  readonly court_type: string | null;
+  readonly court_id: string | null;
+  readonly day_of_week: number[];
+  readonly start_time: string;
+  readonly end_time: string;
+  readonly duration_min: number;
+  readonly price_cents: number;
+  readonly player_multiplier: boolean;
+  readonly priority: number;
+  readonly valid_from: string | null;
+  readonly valid_to: string | null;
+  readonly is_active: boolean;
+}
+
+function filaARegla(f: ReglaFila): PricingRule {
+  return {
+    id: f.id,
+    name: f.name,
+    scope: f.scope as PricingRule["scope"],
+    courtType: f.court_type as CourtType | null,
+    courtId: f.court_id,
+    dayOfWeek: f.day_of_week,
+    startTime: f.start_time,
+    endTime: f.end_time,
+    durationMin: f.duration_min,
+    priceCents: f.price_cents,
+    playerMultiplier: f.player_multiplier,
+    priority: f.priority,
+    validFrom: f.valid_from,
+    validTo: f.valid_to,
+    isActive: f.is_active,
+  };
+}
+
+describe("T12: cada hueco trae su precio resuelto en servidor", () => {
+  // La tarifa base de las pistas de este fichero, a la que cae el slot que ninguna
+  // tarifa toca. Se duplica a proposito, con nombre: es el CONTRATO de la grilla.
+  const BASE = 1200;
+
+  // Las fechas son de AGOSTO, no de junio, a proposito: los bloques y reservas de los
+  // otras describes sobreviven al test (withAdmin, sin rollback) y ya ocupan casi todos
+  // los dias de junio. Agosto esta intacto en este fichero.
+  it("sin regla aplicable cae a la tarifa base, nunca a un precio vacio", async () => {
+    // 2026-08-07 es viernes: ninguna tarifa de T12 esta dada para el dia 5.
+    const cuerpo = await disponibilidad(PISTA_A, "2026-08-07");
+    expect(cuerpo.slots.length).toBeGreaterThan(0);
+    for (const slot of cuerpo.slots) {
+      expect(slot.priceCents).toBe(BASE);
+      expect(slot.priceBreakdown).toEqual([{ label: "Tarifa base", cents: BASE }]);
+    }
+  });
+
+  it("una tarifa global aplica por su nombre y solo al slot que cabe entero", async () => {
+    // 2026-06-15 lunes: la tarifa de manana es 09:00-12:00 (fecha de junio a proposito,
+    // para convivir con las tarifas antigua/futura del test de abajo). El slot
+    // 09:30-11:00 cabe entero; el 11:00-12:30 no termina dentro y el 08:00 no entra.
+    const cuerpo = await disponibilidad(PISTA_A, "2026-06-15");
+    const porHora = Object.fromEntries(cuerpo.slots.map((s) => [s.startsAt, s]));
+    expect(porHora["2026-06-15T09:30"]).toMatchObject({
+      priceCents: 2000,
+      priceBreakdown: [{ label: "Tarifa punta manana", cents: 2000 }],
+    });
+    expect(porHora["2026-06-15T08:00"]?.priceCents).toBe(BASE);
+    expect(porHora["2026-06-15T11:00"]?.priceCents).toBe(BASE);
+  });
+
+  it("una tarifa fuera de su ventana de validez no aplica", async () => {
+    // El lunes 15 hay dos tarifas que NO son validas ese dia: la antigua vencio el 14
+    // (inclusivo) y la futura no empieza hasta el 16. Ninguna etiqueta suya puede salir.
+    const cuerpo = await disponibilidad(PISTA_A, "2026-06-15");
+    const etiquetas = cuerpo.slots.flatMap((s) => s.priceBreakdown.map((l) => l.label));
+    expect(etiquetas).toContain("Tarifa punta manana");
+    expect(etiquetas).not.toContain("Tarifa antigua");
+    expect(etiquetas).not.toContain("Tarifa futura");
+    expect(
+      etiquetas.every((l) => l === "Tarifa punta manana" || l === "Tarifa base"),
+    ).toBe(true);
+  });
+
+  it("court_type gana a global aunque la global tenga mas prioridad", async () => {
+    // Miercoles 2026-08-05: la global punta tiene priority 99 y el tipo cristal 0.
+    // Gana el SCOPE, no el numero: spec 7.3.
+    const cuerpo = await disponibilidad(PISTA_A, "2026-08-05");
+    for (const slot of cuerpo.slots) {
+      expect(slot.priceCents).toBe(1500);
+      expect(slot.priceBreakdown).toEqual([{ label: "Tarifa tipo cristal", cents: 1500 }]);
+    }
+  });
+
+  it("court gana a court_type", async () => {
+    // Jueves 2026-08-06: la tarifa de la pista A (1800) se lleva el slot frente a la
+    // del tipo cristal (1500).
+    const cuerpo = await disponibilidad(PISTA_A, "2026-08-06");
+    for (const slot of cuerpo.slots) {
+      expect(slot.priceCents).toBe(1800);
+      expect(slot.priceBreakdown).toEqual([{ label: "Tarifa pista A", cents: 1800 }]);
+    }
+  });
+
+  it("una regla de pista no cuela su tarifa en el otro club", async () => {
+    // El jueves A tiene 'Tarifa pista A' (1800). B no tiene NINGUNA regla y su pista es
+    // del mismo tipo 'cristal': si la consulta arrastrara reglas ajenas, B veria 1800.
+    // Con la RLS, B ve su tarifa base.
+    apuntarA(SLUG_B);
+    try {
+      const cuerpo = await disponibilidad(PISTA_B, "2026-08-06");
+      for (const slot of cuerpo.slots) {
+        expect(slot.priceCents).toBe(BASE);
+        expect(slot.priceBreakdown).toEqual([{ label: "Tarifa base", cents: BASE }]);
+      }
+    } finally {
+      apuntarA(SLUG_A);
+    }
+  });
+
+  it("player_multiplier multiplica por los jugadores por defecto de la pista", async () => {
+    // Martes 2026-08-04: la tarifa por jugador (1000) aplica al slot de 14:00 y se
+    // multiplica por los 4 jugadores por defecto de la pista. La segunda linea del
+    // desglose es el FACTOR, con centimos 0, no otro cobro.
+    const cuerpo = await disponibilidad(PISTA_A, "2026-08-04");
+    const slotCatorce = cuerpo.slots.find((s) => s.startsAt === "2026-08-04T14:00");
+    const slotCatorceYMedia = cuerpo.slots.find((s) => s.startsAt === "2026-08-04T15:30");
+    expect(slotCatorce).toMatchObject({
+      priceCents: 4000,
+      priceBreakdown: [
+        { label: "Tarifa por jugador", cents: 4000 },
+        { label: "4 jugadores", cents: 0 },
+      ],
+    });
+    // El slot de 15:30 no termina dentro de 14:00-16:30: sigue a tarifa base.
+    expect(slotCatorceYMedia?.priceCents).toBe(BASE);
+  });
+
+  it("una tarifa de otra duracion que la pista no aplica", async () => {
+    // Sabado 2026-08-08: la tarifa de sesenta minutos (999) no encaja con pistas de 90.
+    // Que no aparezca su etiqueta es lo que se afirma, no solo el importe.
+    const cuerpo = await disponibilidad(PISTA_A, "2026-08-08");
+    for (const slot of cuerpo.slots) {
+      expect(slot.priceCents).toBe(BASE);
+      expect(slot.priceBreakdown.map((l) => l.label)).not.toContain(
+        "Tarifa de sesenta minutos",
+      );
+    }
+  });
+
+  it("el PriceQuote de la API coincide con resolvePrice llamado directamente", async () => {
+    // Criterio de verificacion de T12: el numero que ve el socio es exactamente el del
+    // motor, con las MISMAS reglas que la API leyo de la base.
+    const filas = await withAdmin(async (db) => {
+      const result = await db.query<ReglaFila>(
+        `select id, name, scope, court_type, court_id, day_of_week,
+                to_char(start_time, 'HH24:MI') as start_time,
+                to_char(end_time, 'HH24:MI') as end_time,
+                duration_min, price_cents, player_multiplier, priority,
+                to_char(valid_from, 'YYYY-MM-DD') as valid_from,
+                to_char(valid_to, 'YYYY-MM-DD') as valid_to,
+                is_active
+           from public.pricing_rules
+          where tenant_id = $1`,
+        [TENANT_A],
+      );
+      return result.rows;
+    });
+
+    const quote = resolvePrice({
+      court: { id: PISTA_A, courtType: "cristal", basePriceCents: BASE },
+      rules: filas.map(filaARegla),
+      startsAt: "2026-06-15T09:30",
+      durationMin: 90,
+      numPlayers: 4,
+    });
+
+    const slot = (await disponibilidad(PISTA_A, "2026-06-15")).slots.find(
+      (s) => s.startsAt === "2026-06-15T09:30",
+    );
+    expect(quote.totalCents).toBe(2000);
+    expect(slot).toMatchObject({
+      priceCents: quote.totalCents,
+      priceBreakdown: quote.breakdown,
+    });
   });
 });
 

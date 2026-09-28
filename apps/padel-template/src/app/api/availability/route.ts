@@ -8,7 +8,8 @@ import { resolveTenant } from "../../../lib/server/tenant";
 
 /**
  * `GET /api/availability?court_id=<uuid>&date=YYYY-MM-DD` - los huecos de una pista en un
- * dia. Publica (spec 5.1), sin precios: eso es T7.
+ * dia, cada uno con su precio resuelto. Publica (spec 5.1). El precio lo pone T12
+ * (`disponibilidad.ts`), nunca el cliente.
  *
  * ---------------------------------------------------------------------------------------
  * EL PROBLEMA DE LA ZONA HORARIA, QUE ES EL 90% DE ESTE FICHERO

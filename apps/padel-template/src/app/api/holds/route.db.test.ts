@@ -141,6 +141,21 @@ beforeAll(async () => {
        on conflict (id) do nothing`,
       [USUARIO_A, USUARIO_B],
     );
+
+    // Una tarifa de jueves de 2500 para probar T12: el 409 y el hold cobran con reglas
+    // reales, no con la base de siempre. Global, duracion 90 (la de las pistas), sin
+    // multiplicador.
+    await db.query(`delete from public.pricing_rules where tenant_id = $1`, [TENANT_A]);
+    await db.query(
+      `insert into public.pricing_rules
+         (id, tenant_id, name, scope, court_type, court_id, day_of_week,
+          start_time, end_time, duration_min, price_cents, player_multiplier,
+          priority, valid_from, valid_to)
+       values
+         ('00000000-0000-4000-8000-0000000006a6', $1, 'Tarifa Jueves Hold', 'global',
+          null, null, '{4}', '08:00', '22:00', 90, 2500, false, 0, null, null)`,
+      [TENANT_A],
+    );
   });
 
   apuntarA(SLUG_A);
@@ -326,11 +341,65 @@ describe("T11: crear un hold", () => {
     );
     expect(segundo.status).toBe(409);
     const cuerpo = (await segundo.json()) as {
-      alternatives: { slots: ReadonlyArray<{ startsAt: string }> };
+      alternatives: { courtId: string; date: string; slots: ReadonlyArray<{
+        startsAt: string;
+        priceCents: number;
+        priceBreakdown: ReadonlyArray<{ label: string; cents: number }>;
+      }> };
     };
     expect(cuerpo.alternatives.slots.map((s) => s.startsAt)).not.toContain(
       "2026-07-15T08:00",
     );
+  });
+
+  it("el 409 trae alternativas con su precio ya resuelto (T12)", async () => {
+    // Mismo escenario que el 409 de arriba, pero afirmando el precio de las
+    // alternativas: son disponibles REALES, con tarifa resuelta en servidor. El bloque
+    // de las 08:00 del 14 ya lo dejo el otro test, y el martes no tiene tarifa dada.
+    const respuesta = await crear(
+      cuerpoDe({
+        courtId: PISTA_A,
+        startsAt: "2026-07-14T08:00",
+        numPlayers: 4,
+        playerName: "Socio",
+      }),
+      cookieDe(USUARIO_A),
+    );
+    expect(respuesta.status).toBe(409);
+
+    const cuerpo = (await respuesta.json()) as {
+      alternatives: { slots: ReadonlyArray<{
+        startsAt: string;
+        priceCents: number;
+        priceBreakdown: ReadonlyArray<{ label: string; cents: number }>;
+      }> };
+    };
+    const slotNueve = cuerpo.alternatives.slots.find((s) => s.startsAt === "2026-07-14T09:30");
+    expect(slotNueve).toMatchObject({
+      priceCents: PRECIO_BASE,
+      priceBreakdown: [{ label: "Tarifa base", cents: PRECIO_BASE }],
+    });
+  });
+
+  it("el hold cobra con la tarifa del dia, no con la base (T12)", async () => {
+    // Jueves 16: la tarifa de jueves (2500) cubre 08:00-22:00 y pistas de 90 minutos.
+    // Las 08:00 del 16 ya estan ocupadas por el hold del test de limpieza perezosa, asi
+    // que el hueco de las 09:30 es el que pide el socio.
+    const respuesta = await crear(
+      cuerpoDe({
+        courtId: PISTA_A,
+        startsAt: "2026-07-16T09:30",
+        numPlayers: 4,
+        playerName: "Socio",
+      }),
+      cookieDe(USUARIO_A),
+    );
+    expect(respuesta.status).toBe(201);
+    const cuerpo = (await respuesta.json()) as HoldCreadoJson;
+    expect(cuerpo.priceCents).toBe(2500);
+    expect(cuerpo.priceBreakdown).toEqual([
+      { label: "Tarifa Jueves Hold", cents: 2500 },
+    ]);
   });
 
   it("la limpieza perezosa expira el hold caducado en la misma transaccion (4.4.1)", async () => {
