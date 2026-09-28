@@ -1112,3 +1112,26 @@ nunca en un entorno con `pg_cron`.** Es una asuncion, no una comprobacion, y hay
 cerrarla en el primer entorno de Supabase antes de decir que la limpieza de holds caducados
 esta cubierta. La red de seguridad no es la via principal: la via principal es la limpieza
 perezosa dentro de la transaccion de T11, que si esta probada contra Postgres real.
+
+## Un helper de test que revierte no puede probar concurrencia
+
+`withTenant` abre una transaccion y la revierte en `finally`, pase lo que pase el test. Es
+lo correcto para que un test rojo no contamine al siguiente, y es lo que hace legibles los
+tests de RLS y de restricciones. Pero significa que dos llamadas sueltas a `withTenant` son
+dos reservas que **nunca coexisten**: la segunda empieza cuando la primera ya ha
+desaparecido. Un test de solape escrito con dos llamadas sueltas pasa con la `EXCLUDE`
+borrada de la migracion, que es precisamente el fallo que el criterio de concurrencia de la
+spec dice que hay que cazar.
+
+Por eso hace falta un helper aparte, con dos conexiones reales y dos transacciones abiertas
+a la vez. Y por eso el test tiene que arrancar el `INSERT` perdedor como promesa suelta,
+resolver la transaccion ganadora y despues esperar la perdedora: al reves, el `INSERT` se
+queda esperando al `COMMIT` de la otra y el test se cuelga hasta el timeout. **Ese deadlock
+lo escribe el test, no Postgres, y su sintoma (un test que tarda) se parece a un problema de
+rendimiento en lugar de a un error de logica.**
+
+Corolario sobre los tests que hacen `commit` a proposito: dejan filas, y un fichero de tests
+que comparte base con otro tiene que usar rangos de ids que no solapen. Un id compartido
+convierte un fallo de un test en decenas de fallos del otro, y el sintoma (una restriccion
+que el test no probaba) apunta al innocent. Por eso el barrido va en un `afterEach` por
+ventana y no al final del cuerpo del test.

@@ -161,6 +161,78 @@ export async function withClaims<T>(
   }
 }
 
+/** Las dos conexiones, abiertas y con su transaccion ya empezada. */
+export interface Transacciones {
+  /** La primera. En los tests de conflicto, la que entra primero. */
+  readonly a: Queryable;
+  /** La segunda, en su propia conexion: por eso puede quedarse ESPERANDO a la otra. */
+  readonly b: Queryable;
+}
+
+/**
+ * DOS transacciones a la vez, en dos conexiones de verdad.
+ *
+ * POR QUE ESTA Y POR QUE NO BASTA CON LLAMAR DOS VECES A `withTenant`
+ * `withTenant` revierte SIEMPRE, incluso cuando el test pasa, y por eso dos llamadas
+ * sueltas son dos reservas que NUNCA coexisten: la segunda llega cuando la primera ya no
+ * esta. Un test de solape escrito asi pasa con el `EXCLUDE` BORRADO de la migracion, que
+ * es justo el fallo que el criterio de T10 dice que hay que cazar. Aqui las dos filas
+ * existen a la vez porque cada una va en su transaccion, y el `EXCLUDE` tiene algo real
+ * que rechazar.
+ *
+ * QUE NO HACE Y POR QUE
+ * No sincroniza nada ni espera a que la otra este lista. Cada `query` va por su cuenta, y
+ * la que choca se QUEDA ESPERANDO en el servidor hasta que la otra resuelve, que es
+ * justamente el comportamiento que hay que probar. Por eso el test tiene que arrancar el
+ * segundo `INSERT` como promesa suelta, resolver la primera transaccion y despues
+ * awaitar la segunda: si se espera al segundo `INSERT` antes de resolver la primera, el
+ * deadlock lo escribe el test, no Postgres, y el test falla por su cuenta.
+ *
+ * LAS DOS SON `authenticated`, CON RLS APLICANDO
+ * Una transaccion como superusuario no demuestra nada del comportamiento real, que es el
+ * de un JWT. Las dos se abren como el tenant que se le pase.
+ *
+ * Y LAS DOS SE REVIERTEN AL TERMINAR, por el mismo motivo que `withTenant`. La excepcion
+ * es un test que hace `commit` a proposito, el que gana la carrera, y ahi la fila se
+ * queda en la base: ese residuo lo borra el propio test, porque borrarlo por fuera en
+ * silencio esconderia justo el dato interesante, que es que el ganador se escribio de
+ * verdad.
+ */
+export async function withTransaccionesConcurrentes<T>(
+  fn: (tx: Transacciones) => Promise<T>,
+  key: TenantKey = "a",
+): Promise<T> {
+  const clients = [new Client(connection()), new Client(connection())];
+  for (const client of clients) {
+    await client.connect();
+    await client.query("begin");
+    await client.query("set local role authenticated");
+    await client.query(`select set_config('request.jwt.claims', $1, true)`, [
+      JSON.stringify({
+        sub: "00000000-0000-4000-8000-0000000000aa",
+        tenant_id: TENANT_IDS[key],
+        role: "authenticated",
+      }),
+    ]);
+  }
+  // Desempaquetado a mano, y no `const [a, b] = clients`: con `noUncheckedIndexedAccess`
+  // el array da `Client | undefined`, y aqui los dos existen porque los dos se acaban de
+  // crear y conectar. El array no se encoge, asi que los indices 0 y 1 estan.
+  const primera = clients[0] as Client;
+  const segunda = clients[1] as Client;
+  try {
+    return await fn({ a: primera, b: segunda });
+  } finally {
+    for (const client of clients) {
+      try {
+        await client.query("rollback");
+      } finally {
+        await client.end();
+      }
+    }
+  }
+}
+
 /**
  * Comprueba que la extension `name` esta instalada, y falla si no lo esta.
  *

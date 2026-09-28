@@ -617,3 +617,50 @@ un caso de solape van ahora en la misma transaccion.
 **La trampa del `not null`.** En PostgreSQL 17 los `not null` no aparecen en
 `pg_constraint` y su mensaje de error no lleva nombre de restriccion, solo la columna. Es el
 unico assert del fichero que mira la columna en vez del nombre, y el propio test lo dice.
+
+## T10: concurrencia de holds (cerrada)
+
+`bookings.concurrencia.db.test.ts`: 9 tests, 185 en total, `pnpm verify` verde. Nuevo helper
+`withTransaccionesConcurrentes` en `db-harness.ts`, con dos conexiones reales, dos
+transacciones abiertas a la vez, las dos como `authenticated` con RLS, y las dos
+revertidas al terminar.
+
+**El criterio de concurrencia NO se puede probar con el helper que ya existia.** Este es el
+hallazgo de la tarea: `withTenant` revierte SIEMPRE, aunque el test pase, asi que dos
+llamadas sueltas son dos reservas que nunca coexisten: la segunda llega cuando la primera ya
+ha desaparecido. Un test de solape escrito asi pasa con el `EXCLUDE` BORRADO. La primera
+version de estos tests hacia exactamente eso, y solo se vio al quitar la `EXCLUDE` de la
+migracion y comprobar que seguian en verde. Por eso hace falta el helper nuevo, y por eso
+el `INSERT` perdedor se arranca como promesa suelta, se resuelve la primera transaccion y
+despues se espera la segunda: al reves, el deadlock lo escribe el test.
+
+**La primera mutacion no valia, y casi se cuela como si valiera.** Al quitar la `EXCLUDE`,
+todos los tests fallaron, pero no por la `EXCLUDE`: una sustitucion de texto habia juntado
+dos lineas del `create table` y la tabla no existia. Un test que falla por la razon
+equivocada teaches lo contrario de lo que creias, y `pnpm test:db` en verde con la base
+montada habria parecido la prueba de que la mutacion funcionaba. Repetida con una edicion
+limpia: 6 de los 9 tests caen con la `EXCLUDE` fuera. Los 3 que siguen verdes son
+justamente los que no dependen de ella.
+
+**Los ids de este fichero van en el rango 500-599, y no por gusto.** Los ficheros de tests
+comparten base. Los tests de concurrencia hacen `commit` a proposito (el ganador se escribe
+de verdad), y con los ids que usaba T9 los residuos de un test de T10 hicieron fallar a T9
+con `llave duplicada viola bookings_pkey`: treinta fallos de T9 que apuntaban a una
+restriccion que no estaban probando. Por eso el rango es separado y el `afterEach` barre por
+ventana, no por lista de ids, para que un test que falle antes de su limpieza no arrastre su
+fila al siguiente.
+
+**El reloj no se prueba esperando.** "A los 3 min + 1 s el slot vuelve a estar libre" se
+comprueba escribiendo `hold_expires_at` en el pasado, que es el estado que la fila tiene en
+ese instante. Tres minutos y un segundo de suite para comprobar lo mismo, y en un portatil
+lento el fallo seria del timeout y no del assert. Los dos lados del limite estan: justo
+antes de caducar el hold sigue bloqueando, un segundo despues el slot esta libre.
+
+**Un test de la carrera que faltaba.** El caso real no es el teorico: dos socios ven un
+hueco con un hold a punto de caducar, los dos pulsan a la vez y los dos ejecutan la limpieza
+perezosa antes de insertar. La limpieza no es un `if`, son dos `UPDATE` que pueden tocar la
+misma fila. Ese caso esta probado, y comprueba que al final hay un solo hold vigente.
+
+**Lo que T10 NO prueba:** el 409 como HTTP, porque el endpoint es de T11. aqui se comprueba
+que el conflicto lo decide la `EXCLUDE` en la base. Tampoco el `pg_cron`, que no existe en
+este PostgreSQL.

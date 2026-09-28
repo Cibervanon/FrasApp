@@ -9,15 +9,21 @@ producto: venta de plantilla de código y SaaS de marca blanca por instancia ais
 
 ## Next Step
 
-T7 (`5ede9fb`), T8 (`d1faac1`) y T9 cerradas, y con ellas el Checkpoint 2 salvo la revision
-humana. Tarea siguiente: **T10** (test de concurrencia de holds, seccion 7.4). Es la red de
-proteccion de T9 probada antes de que exista el endpoint: dos intentos simultaneos sobre el
-mismo slot y **exactamente uno** gana. Ahora que el `EXCLUDE` esta en su forma final, es el
-momento de comprobar que aguanta la concurrencia de verdad y no solo en serie.
+T7 (`5ede9fb`), T8 (`d1faac1`), T9 (`022d9b9`) y T10 cerradas, y con ellas el Checkpoint 2
+salvo la revision humana. Tarea siguiente: **T11**, los endpoints de hold (`POST /api/holds`
+y `DELETE /api/holds/[id]`), que es la primera vez que la reserva existe fuera de la base.
 
-Antes de empezar T10, dos cosas que dependen de decisiones tuyas: si la concurrencia se
-prueba con dos conexiones reales de Postgres (mas fiel, mas lento) o con dos transacciones
-simultaneas en el mismo pool, y si el endpoint de reserva de T11 entra ya en la misma tarea.
+Decisiones tomadas al ejecutar T10, sin esperar: dos conexiones reales de Postgres (la
+opcion mas fiel) y el endpoint fuera de T10. El 409 sigue sin probarse como HTTP, porque
+no hay endpoint; T10 comprueba que el conflicto lo decide la `EXCLUDE`, y T11 comprueba que
+se traduce en un 409 con horarios alternativos.
+
+Dos cosas de T11 que dependen de decisiones tuyas, y que conviene tener claras antes de
+empezar: si la limpieza perezosa se hace con `expire_stale_holds` en la misma transaccion
+del `INSERT` (ya escrito y probado) o con un `DELETE` sobre los caducados, y si el overlay
+de `bookings` en `GET /api/availability` entra en T11 o en una tarea aparte. Ese overlay no
+lo pide ninguna tarea y es lo que impide que el 409 ofrezca alternativas que el propio
+endpoint de disponibilidad no muestra.
 
 ## Current Phase
 

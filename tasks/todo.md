@@ -347,21 +347,30 @@ que `now()` en el predicado es rechazado por Postgres (documenta la trampa)
 
 ---
 
-### [ ] T10: Test de concurrencia de holds `[TDD]`
+### [x] T10: Test de concurrencia de holds `[TDD]`
 **Spec:** seccion 7.4
 
 **Descripcion:** La red de proteccion de T9, probada antes de que exista el endpoint. Dos
 intentos simultaneos sobre el mismo slot: **exactamente uno** gana.
 
 **Criterios de aceptacion:**
-- [ ] Dos `POST` concurrentes sobre el mismo slot: uno devuelve exito, el otro 409
-- [ ] Un hold caducado se limpia al intentar reservar, **sin esperar al cron**. Test que
+- [x] Dos intentos concurrentes sobre el mismo slot: uno entra y el otro recibe el
+      conflicto de la `EXCLUDE`. El **409** del endpoint es de T11, aqui se comprueba que
+      el conflicto lo decide la base
+- [x] Un hold caducado se limpia al intentar reservar, **sin esperar al cron**. Test que
       fuerza `hold_expires_at` al pasado y comprueba que el siguiente intento tiene exito
-- [ ] Un hold vigente **no** se limpia
-- [ ] A los 3 min + 1 s el slot vuelve a estar libre
+- [x] Un hold vigente **no** se limpia
+- [x] A los 3 min + 1 s el slot vuelve a estar libre
 
 **Verificacion:** `pnpm test` con la suite de concurrencia, ejecutada **en paralelo real**,
 no con mocks
+
+**Nota:** 9 tests en `src/lib/bookings.concurrencia.db.test.ts`, con
+`withTransaccionesConcurrentes` (dos conexiones reales, dos transacciones, las dos como
+`authenticated` con RLS). El primero de los criterios no se puede escribir con dos llamadas
+a `withTenant`: ese helper revierte siempre, asi que las dos reservas nunca coexisten y el
+test pasaria con el `EXCLUDE` borrado. Mutacion comprobada: quitando `bookings_no_overlap`
+caen 6 de los 9.
 
 **Depende de:** T9 · **Alcance:** S
 
