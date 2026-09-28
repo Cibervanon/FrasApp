@@ -65,6 +65,21 @@ values
   ('00000000-0000-4000-8000-000000000001', 'push_notifications', false)
 on conflict (tenant_id, feature_key) do nothing;
 
+-- Gestor del club de demo (T13). Persona de verdad en `auth.users` y su fila en
+-- `tenant_members`; con ella se puede entrar en /admin/pagos y hacer el onboarding
+-- de cobros en desarrollo. Id fijo para que los tests puedan referenciarlo.
+insert into auth.users (id, email)
+values ('00000000-0000-4000-8000-0000000000d1', 'gestor@clubpaddemo.example')
+on conflict (id) do nothing;
+
+insert into public.tenant_members (tenant_id, user_id, role)
+values (
+  '00000000-0000-4000-8000-000000000001',
+  '00000000-0000-4000-8000-0000000000d1',
+  'gestor'
+)
+on conflict (tenant_id, user_id) do nothing;
+
 -- Politica de cancelacion (OQ-5) y aviso legal (OQ-9).
 --
 -- Los 3 tramos son el **valor por defecto sugerido**, no un fijo: el club puede
