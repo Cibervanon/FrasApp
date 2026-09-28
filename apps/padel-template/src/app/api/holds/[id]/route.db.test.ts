@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+﻿import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { POST } from "../route";
 import { DELETE } from "./route";
@@ -239,7 +239,7 @@ describe("T11: liberar un hold", () => {
     // El pago lo confirma el admin: el socio ya no retiene, ha pagado.
     await withAdmin(async (db) => {
       await db.query(
-        `update public.bookings set status = 'confirmed', confirmed_at = now() where id = $1`,
+        `update public.bookings set status = 'confirmed', confirmed_at = now(), payment_status = 'paid' where id = $1`,
         [id],
       );
     });

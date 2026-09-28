@@ -137,17 +137,24 @@ async function reservar(
   const zona = courtId === PISTA_A ? ZONA_A : ZONA_B;
   const holdExpiraSql =
     status === "held" ? (holdExpira ?? "now() + interval '3 minutes'") : "null";
+  // Coherencia de pagos de T14 (20260930000000_payments_intent.sql): pending_payment
+  // exige Intent + unpaid, confirmed exige paid. Los otros estados dejan las columnas
+  // null, como un hold recien creado.
+  const intent =
+    status === "pending_payment" ? `pi_av_${courtId}_${desde}_${hasta}` : null;
+  const pago =
+    status === "pending_payment" ? "unpaid" : status === "confirmed" ? "paid" : null;
   await withAdmin(async (db) => {
     await db.query(
       `insert into public.bookings
          (tenant_id, court_id, user_id, starts_at, ends_at, status,
           hold_expires_at, price_cents, price_breakdown, num_players,
-          player_name, is_minor)
+          player_name, is_minor, stripe_payment_intent_id, payment_status)
        values ($1, $2, $3,
                ($4::timestamp at time zone $7),
                ($5::timestamp at time zone $7),
-               $6, ${holdExpiraSql}, 1200, '[]', 4, 'Socio de T5d', false)`,
-      [tenant, courtId, USUARIO_A, `${dia} ${desde}`, `${dia} ${hasta}`, status, zona],
+               $6, ${holdExpiraSql}, 1200, '[]', 4, 'Socio de T5d', false, $8, $9)`,
+      [tenant, courtId, USUARIO_A, `${dia} ${desde}`, `${dia} ${hasta}`, status, zona, intent, pago],
     );
   });
 }

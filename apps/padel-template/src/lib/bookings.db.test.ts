@@ -100,7 +100,7 @@ function bookingId(n: number): string {
  * queria probar. Por eso los cambios van por nombre de columna de verdad.
  */
 function reserva(n: number, cambios: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
+  const fila: Record<string, unknown> = {
     id: bookingId(n),
     tenant_id: TENANT_IDS.a,
     court_id: COURT_IDS.a,
@@ -115,6 +115,20 @@ function reserva(n: number, cambios: Record<string, unknown> = {}): Record<strin
     player_name: "Socio de Prueba",
     ...cambios,
   };
+
+  // Los checks de T14 (20260930000000_payments_intent.sql) imponen coherencia de
+  // pagos: pending_payment exige intent + payment_status='unpaid', y confirmed exige
+  // payment_status='paid'. Que el state machine YEZCA coherente hasta en los fixtures
+  // es la prueba de que el modelo de datos cerrado por T14 no se puede violar. Un
+  // cambio que pase un estado incoherente a proposito sobrescribe la columna, que es
+  // como los tests de rechazo propio de E1 lo cazan.
+  if (fila.status === "pending_payment") {
+    if (fila.stripe_payment_intent_id === undefined) fila.stripe_payment_intent_id = bookingId(n);
+    if (fila.payment_status === undefined) fila.payment_status = "unpaid";
+  } else if (fila.status === "confirmed") {
+    if (fila.payment_status === undefined) fila.payment_status = "paid";
+  }
+  return fila;
 }
 
 /**
@@ -906,7 +920,10 @@ describe("T9: el precio de la reserva es un snapshot", () => {
           '{"regla":"pista","total_cents":2500}',
         ],
       );
-      await db.query(`update public.bookings set status = 'confirmed' where id = $1`, [bookingId(1)]);
+      await db.query(
+        `update public.bookings set status = 'confirmed', payment_status = 'paid' where id = $1`,
+        [bookingId(1)],
+      );
 
       const fila = await db.query<{ price_cents: number; price_breakdown: { regla: string } }>(
         `select price_cents, price_breakdown from public.bookings where id = $1`,
