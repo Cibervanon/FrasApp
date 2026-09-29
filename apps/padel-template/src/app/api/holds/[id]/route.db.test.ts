@@ -59,6 +59,9 @@ async function crearHold(fecha: string, cookie: string): Promise<string> {
         startsAt: `${fecha}T08:00`,
         numPlayers: 4,
         playerName: "Socio Uno",
+        // Obligatoria desde T14c. Este fichero prueba el 404/409 de liberar, no la edad, asi
+        // que un adulto de 1990 es el que menos molesta aqui.
+        playerBirthDate: "1990-01-01",
       }),
     }),
   );

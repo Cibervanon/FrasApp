@@ -1,7 +1,7 @@
-import { resolvePrice } from "@frasapp/core";
+import { esMenorDeEdad, resolvePrice } from "@frasapp/core";
 import type { BookingStatus, PriceLine } from "@frasapp/core";
 
-import { tenantSession } from "./db";
+import { baseQuery, tenantSession } from "./db";
 import { disponibilidadDePista } from "./disponibilidad";
 import type { DisponibilidadConPrecio } from "./disponibilidad";
 
@@ -45,6 +45,31 @@ export interface CrearHoldInput {
   readonly startsAt: string;
   readonly numPlayers: number;
   readonly playerName: string;
+  /**
+   * `YYYY-MM-DD`, OBLIGATORIA (T14c-B).
+   *
+   * Antes era opcional y el club decidia con una casilla. Con la fecha ausente, un menor de
+   * 15 puede saltarse el consentimiento del tutor simplementemente no mandandola, y el
+   * campo `is_minor` acaba en `false`: el caso que el RGPD de menores prohibe.
+   */
+  readonly playerBirthDate: string;
+  /**
+   * Los datos del tutor, y SOLO si el servidor ha determinado que el jugador es menor.
+   *
+   * Que sea opcional en el tipo no es una puerta: `crearHold` exige los tres campos cuando
+   * el jugador es menor, y los rechaza con `tutor_no_requerido` cuando es mayor. El tipo lo
+   * que hace es dejar que la RUTA lo escriba sin distinguir, que es donde de verdad se valida
+   * la forma.
+   */
+  readonly tutor?: Tutor;
+}
+
+/** El tutor que consiente, tal y como lo manda el cuerpo. La forma la mira la ruta. */
+export interface Tutor {
+  readonly guardianName: string;
+  readonly guardianEmail: string;
+  readonly guardianPhone: string;
+  readonly guardianRelation: "madre" | "padre" | "tutor_legal" | "otro";
 }
 
 /** Un hold creado, con todo lo que la respuesta necesita para pintarlo. */
@@ -57,6 +82,11 @@ export interface HoldCreado {
   readonly holdExpiresAt: string;
   readonly priceCents: number;
   readonly priceBreakdown: readonly PriceLine[];
+  /**
+   * Lo que el SERVIDOR dedujo de la fecha y del umbral del club, no lo que pidio el cuerpo.
+   * La interfaz de la UI (T18a) lo usa para preguntar por el tutor, y no al reves.
+   */
+  readonly isMinor: boolean;
 }
 
 /** Un hold liberado por su titular: la reserva queda cancelada y el hueco, libre. */
@@ -74,7 +104,25 @@ export type CrearHoldResultado =
   | { readonly tipo: "creado"; readonly hold: HoldCreado }
   | { readonly tipo: "sin_pista" }
   | { readonly tipo: "sin_usuario" }
-  | { readonly tipo: "conflicto"; readonly alternativas: DisponibilidadConPrecio };
+  | { readonly tipo: "conflicto"; readonly alternativas: DisponibilidadConPrecio }
+  /**
+   * El servidor ha dicho que el jugador es menor y el cuerpo no trae los tres datos del
+   * tutor. 422 y NO 400: el cuerpo esta bien formado, lo que falta es informacion que el
+   * socio tiene que dar. Y se responde ANTES de escribir, asi que no queda un hold sin tutor.
+   */
+  | { readonly tipo: "faltan_datos_tutor" }
+  /**
+   * El cuerpo trae tutor y el servidor ha dicho que el jugador es mayor. 400, y no "se ignora
+   * el tutor": si el club y el socio no coinciden en la edad, el que se equivoca es el club y
+   * el motivo se ve mejor en un 400 que en un hold guardado con datos de tutor que nadie
+   * pidio.
+   */
+  | { readonly tipo: "tutor_no_requerido" }
+  /**
+   * Fecha de nacimiento que no existe en el calendario, o de futuro. 400: es del cuerpo, y la
+   * ruta lo dice sin adivinar cual de las dos cosas fue.
+   */
+  | { readonly tipo: "fecha_invalida" };
 
 /** Lo que puede salir de `liberarHold`. La ruta traduce cada caso a un status. */
 export type LiberarHoldResultado =
@@ -97,6 +145,59 @@ export async function crearHold(
   input: CrearHoldInput,
 ): Promise<CrearHoldResultado> {
   const fecha = input.startsAt.slice(0, 10);
+
+  // -------------------------------------------------------------------------------------
+  // LA EDAD, ANTES DE NADA. Y ANTES DEL PRECIO.
+  //
+  // El orden importa por dos razones. La primera, que el club no tiene por que saber el
+  // precio de nada para decirte que te falta el tutor. La segunda, y la que de verdad obliga
+  // a que este bloque este aqui y no despues del `insert`: un menor sin tutor no debe dejar
+  // NINGUNA fila, ni un hold que caduque luego, ni un hueco tapado tres minutos. Si este
+  // codigo se moviera debajo del `insert`, un 422 tardio tendria que borrar lo que ya se
+  // escribio, y borrar es mas caro de acertar que no escribir.
+  //
+  // Que el SERVIDOR decida y no el cuerpo es la decision T14c-C: un `isMinor: false` en el
+  // JSON era una casilla de "no soy menor" que el propio menor marcaba.
+  const edad = await edadDelClub(tenantId, timezone);
+  if (!Number.isInteger(edad.umbral) || edad.umbral < 14 || edad.umbral > 21) {
+    // La columna tiene un CHECK de 14 a 21, asi que llegar aqui es una fila corrupta o una
+    // migracion que no se aplico. Se lanza en vez de devolver 400: si el umbral del club no
+    // es valido, un 400 haria creer al socio que su fecha esta mal, y el menor pasaria sin
+    // tutor. Aqui lo correcto es un 500 que alguien mire la fila.
+    throw new Error(
+      `El tenant ${tenantId} tiene min_player_age = ${String(edad.umbral)}, fuera del ` +
+        `rango 14..21 que fija la migracion.`,
+    );
+  }
+
+  let esMenor: boolean;
+  try {
+    esMenor = esMenorDeEdad({
+      fechaNacimiento: input.playerBirthDate,
+      edadMinima: edad.umbral,
+      hoy: edad.hoy,
+    });
+  } catch (error: unknown) {
+    // Con el umbral ya validado, lo unico que puede fallar aqui es la FECHA. Se devuelve el
+    // 400 en vez de relanzar: la ruta traduria cualquier error a 500, y un 500 por una fecha
+    // con dia 30 de febrero es una respuesta que no ayuda a nadie a arreglarlo.
+    if (error instanceof Error) return { tipo: "fecha_invalida" };
+    throw error;
+  }
+
+  if (esMenor) {
+    const tutor = input.tutor;
+    if (
+      tutor === undefined ||
+      esVacio(tutor.guardianName) ||
+      esVacio(tutor.guardianEmail) ||
+      esVacio(tutor.guardianPhone)
+    ) {
+      return { tipo: "faltan_datos_tutor" };
+    }
+  } else if (input.tutor !== undefined) {
+    return { tipo: "tutor_no_requerido" };
+  }
 
   // El chequeo ANTES de escribir, con la pista y sus huecos. Sirve para el 404 (la pista
   // no existe o es de otro club), para el precio (viene de la pista) y para el 409 barato:
@@ -149,6 +250,12 @@ export async function crearHold(
         JSON.stringify(quote.breakdown),
         input.numPlayers,
         input.playerName,
+        esMenor,
+        input.playerBirthDate,
+        input.tutor?.guardianName ?? null,
+        input.tutor?.guardianEmail ?? null,
+        input.tutor?.guardianPhone ?? null,
+        input.tutor?.guardianRelation ?? null,
       ]);
       const fila = filas.rows[0];
       if (fila === undefined) {
@@ -227,6 +334,7 @@ interface HoldFila {
   readonly hold_expires_at: string;
   readonly price_cents: number;
   readonly price_breakdown: unknown;
+  readonly is_minor: boolean;
 }
 
 interface HoldReservaFila {
@@ -254,6 +362,7 @@ function aHoldCreado(fila: HoldFila, courtId: string): HoldCreado {
     holdExpiresAt: fila.hold_expires_at,
     priceCents: fila.price_cents,
     priceBreakdown: fila.price_breakdown as readonly PriceLine[],
+    isMinor: fila.is_minor,
   };
 }
 
@@ -266,6 +375,70 @@ function aHoldLiberado(fila: HoldLiberadoFila): HoldLiberado {
     endsAt: fila.ends_at,
     cancelledAt: fila.cancelled_at,
   };
+}
+
+/**
+ * Lo que hay que saber del club para decidir si este jugador es menor: SU umbral y SU dia.
+ *
+ * ---------------------------------------------------------------------------------------
+ * `now() at time zone $2` Y NO `now()::date`
+ *
+ * `now()::date` es el dia de UTC. A las 00:30 de la madrugada en Mallorca, en UTC todavia es
+ * el dia de ayer, y un socio que cumple 18 anos HOY seria tratado como menor: le pedirian
+ * un tutor que no necesita. Al reves, en un club de Oceania un socio de 18 seria tratado
+ * como menor un dia entero de mas. El dia que decide la edad es el dia que ve el club, y la
+ * zona que lo define esta en su propia fila.
+ *
+ * `to_char(..., 'YYYY-MM-DD')` y no `::text`: el texto de un `date` en Postgres depende de
+ * `DateStyle`, que es un ajuste de sesion, y un servidor con `DateStyle = 'Postgres, DMY'`
+ * devolveria `30-12-2015`. La funcion pura de `core` no deberia tener que defenderse de eso.
+ *
+ * ---------------------------------------------------------------------------------------
+ * POR QUE `baseQuery` Y NO LA DEL TENANT, Y POR QUE SIN CACHE
+ *
+ * `public.tenants` no tiene RLS: es la unica tabla sin, y `resolveTenant` lo documenta
+ * (`tenant.ts`). Entrar por la conexion del tenant no aislaria nada aqui, asi que se lee con
+ * `baseQuery` y `where id = $1`, que es el mismo aislamiento por identificador unico que usa
+ * el propio `resolveTenant` con su `slug`. El `tenantId` no viene del cuerpo: lo resuelve la
+ * ruta con `resolveTenant`.
+ *
+ * Y NO SE MEMORIZA, a diferencia de `resolveTenant`. Ahi el cache es de properties de
+ * despliegue (zona, nombre, idioma) y cambiar de club es una alta en caliente. El umbral NO
+ * es eso: lo edita el gestor desde el panel (T18e), y un umbral cacheado seria un menor
+ * prevenido con la regla de ayer. Una consulta indexada por la clave primaria es lo que
+ * cuesta leerlo bien.
+ */
+async function edadDelClub(tenantId: string, timezone: string): Promise<EdadDelClub> {
+  const filas = await baseQuery<{ min_player_age: number; hoy: string }>(
+    `select min_player_age, to_char(now() at time zone $2, 'YYYY-MM-DD') as hoy
+       from public.tenants
+      where id = $1`,
+    [tenantId, timezone],
+  );
+  const fila = filas[0];
+  if (fila === undefined) {
+    // No puede pasar por el camino normal (la ruta acaba de resolver el tenant), asi que si
+    // pasa es que la fila se borro entre medias. Se dice claro, en vez de devolver un
+    // umbral por defecto que haria minors a todo el mundo sin avisar.
+    throw new Error(
+      `El tenant ${tenantId} no existe al pedir la edad del jugador. Si la ruta acaba de ` +
+        `resolverlo, alguien borro el club a mitad de la peticion.`,
+    );
+  }
+  return { umbral: fila.min_player_age, hoy: fila.hoy };
+}
+
+/** El umbral del club y su dia de hoy, que es lo unico que hace falta para la edad. */
+interface EdadDelClub {
+  /** `tenants.min_player_age`. Lo valida `crearHold`, no esta funcion. */
+  readonly umbral: number;
+  /** `YYYY-MM-DD` en la zona del club. Nunca la fecha de UTC. */
+  readonly hoy: string;
+}
+
+/** Un texto que no es un dato: vacio o solo espacios. */
+function esVacio(texto: string): boolean {
+  return texto.trim() === "";
 }
 
 interface ErrorDeBase {
@@ -297,26 +470,37 @@ function esUsuarioInexistente(error: unknown): boolean {
  * el `starts_at` viaja como hora de pared del club (`$4`, un `timestamp` sin zona) y Postgres
  * lo convierte a instante con la zona del club (`$5`). Al devolver, `at time zone $5` en el
  * otro sentido, para que la respuesta sea la misma hora que pidio el socio.
+ *
+ * Las columnas de menor (T14c) van con el `case`: `guardian_consent_at` es `now()` de la
+ * BASE cuando el jugador es menor, y `null` cuando no lo es. La fecha del consentimiento no
+ * viaja en el `insert` porque no viene del cuerpo: si el reloj del consentidor fuera el del
+ * navegador, un reloj mal puesto fecharia el RGPD de un menor en 1970.
  */
 const SQL_CREAR_HOLD = `
 insert into public.bookings
   (tenant_id, court_id, user_id,
    starts_at, ends_at, status, hold_expires_at,
-   price_cents, price_breakdown, currency, num_players, player_name, is_minor)
+   price_cents, price_breakdown, currency, num_players, player_name,
+   is_minor, player_birth_date,
+   guardian_name, guardian_email, guardian_phone, guardian_relation, guardian_consent_at)
 values
   ($1::uuid, $2::uuid, $3::uuid,
    ($4::timestamp at time zone $5),
    (($4::timestamp at time zone $5) + make_interval(mins => $6)),
    'held',
    now() + interval '3 minutes',
-   $7, $8::jsonb, 'eur', $9, $10, false)
+   $7, $8::jsonb, 'eur', $9, $10,
+   $11::boolean, $12::date,
+   $13, $14, $15, $16,
+   case when $11::boolean then now() end)
 returning
   id,
   to_char(starts_at at time zone $5, 'YYYY-MM-DD"T"HH24:MI') as starts_at,
   to_char(ends_at at time zone $5, 'YYYY-MM-DD"T"HH24:MI') as ends_at,
   to_char(hold_expires_at at time zone $5, 'YYYY-MM-DD"T"HH24:MI:SS') as hold_expires_at,
   price_cents,
-  price_breakdown
+  price_breakdown,
+  is_minor
 `;
 
 /**

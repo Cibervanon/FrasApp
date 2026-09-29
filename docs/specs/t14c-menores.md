@@ -85,6 +85,16 @@ comprobacion va ANTES del `INSERT`, y el test cuenta las filas. Las cuatro colum
 que exige la spec son `guardian_name`, `guardian_email`, `guardian_phone` y
 `guardian_consent_at`; este ultimo lo pone el servidor, asi que el cliente aporta tres.
 
+**T14c-G2. Mayor + datos de tutor -> 400 `tutor_no_requerido`, con CERO filas.** Anadido al
+escribir los tests de E2, que es un caso que la matriz de abajo no recogia. El servidor ha
+calculado que el jugador no es menor y el cuerpo trae un tutor completo: los dos no se
+cuentan, y es el club el que se equivoca, no el concepto de "no soy menor" que venia en el
+cuerpo. Se responde **400** y no se ignora el bloque en silencio, porque un hold guardado con
+datos de tutor que nadie pidio es una traza que luego explica nadie, y porque T14c-C ya
+decidio que los campos que el servidor puede calcular no son un error de forma sino un
+conflicto de criterio. Cero filas por el mismo motivo que T14c-G. Lo que NO se hace es
+reutilizar el 422: ese dice "falta el tutor", y aqui sobra.
+
 **T14c-H. La respuesta lleva el flag, y la pantalla lo consume en T18a.** `HoldCreado` gana
 `isMinor`, y el **201** de `POST /api/holds` lo trae. La spec 6.2/7.5 pide que el aviso de
 responsabilidad aparezca en `/reserva/confirmar` "si y solo si el jugador es menor", y esa
@@ -129,6 +139,7 @@ socio -> POST /api/holds
 | 9 | `guardianRelation = "abuela"` | 400 |
 | 10 | el cuerpo dice `isMinor: true` con fecha de adulta | 201 con `is_minor = false`: el cliente no declara tampoco |
 | 11 | liberar el hold (T11) | la fila conserva fecha y tutor: el borrado es de T19 (RGPD) |
+| 13 | adulto con los cuatro datos de tutor | 400 `tutor_no_requerido`, CERO filas (T14c-G2) |
 | 12 | el `check` de T9 sigue | un INSERT con `is_minor = true` sin tutor -> 23514; y el inverso, `is_minor = false` con fecha de menor, la base lo **acepta**: por eso existe T14c |
 
 ## Matriz de tests (desglose E1-E4, TDD: ROJO antes que implementacion)

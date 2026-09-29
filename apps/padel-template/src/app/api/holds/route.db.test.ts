@@ -74,8 +74,31 @@ async function crear(cuerpo: string, cookie: string | null): Promise<Response> {
   );
 }
 
+/**
+ * Un adulto de 1990, que es lo que aporta por defecto a los cuerpos de T11.
+ *
+ * ---------------------------------------------------------------------------------------
+ * POR QUE SE COMPLETA AQUI Y NO EN CADA CUERPO
+ *
+ * Desde T14c `playerBirthDate` es OBLIGATORIA, y catorce de los cuerpos de este fichero no
+ * van de ella: estan probando el precio, el 409, el 404 o la cookie. Anadirsela a los catorce
+ * seria ruido en un test que no la mira, y un sitio unico del que se ve el motivo es mas
+ * util que catorce lineas iguales. Un adulto de 1990 no cambia ninguna de las cosas que
+ * estos casos comprueban.
+ *
+ * Un cuerpo que pase `playerBirthDate: null` o que no sea un objeto NO se toca, que es justo
+ * lo que necesitan los casos de cuerpo malformado. Y los 400 y 422 de la fecha y del tutor
+ * los prueba T14c E3, con la fecha puesta a proposito.
+ */
+const NACIMIENTO_ADULTO = "1990-01-01";
+
 function cuerpoDe(campo: unknown): string {
-  return typeof campo === "string" ? campo : JSON.stringify(campo);
+  if (typeof campo !== "object" || campo === null || Array.isArray(campo)) {
+    return typeof campo === "string" ? campo : JSON.stringify(campo);
+  }
+  const cuerpo = campo as Record<string, unknown>;
+  if ("playerBirthDate" in cuerpo) return JSON.stringify(cuerpo);
+  return JSON.stringify({ playerBirthDate: NACIMIENTO_ADULTO, ...cuerpo });
 }
 
 function apuntarA(slug: string): void {
