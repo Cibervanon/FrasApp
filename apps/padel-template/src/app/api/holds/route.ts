@@ -216,7 +216,7 @@ function validarTutor(bruto: unknown): { error: string } | { tutor?: Tutor } {
   };
   for (const [nombre, valor] of Object.entries(textos)) {
     if (typeof valor !== "string" || valor.trim().length === 0) {
-      return { error: "`tutor.${nombre}` tiene que ser un texto no vacio." };
+      return { error: `\`tutor.${nombre}\` tiene que ser un texto no vacio.` };
     }
   }
 
