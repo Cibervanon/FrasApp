@@ -9,18 +9,74 @@ producto: venta de plantilla de código y SaaS de marca blanca por instancia ais
 
 ## Next Step
 
-T7 (`5ede9fb`), T8 (`d1faac1`), T9 (`022d9b9`), T10 y **T11 cerradas**. Tarea siguiente:
-**T12**, `pricing_rules` + disponibilidad con precio (`resolvePrice` resuelto en servidor,
-primer anclaje del precio en la API).
+**T13 y T14 cerradas en codigo: T14 E1-E4 verdes y commiteado, `pnpm verify` raiz al
+completo (300 tests DB, 91 unitarios, 152 core, typecheck/lint/encoding 0, build y 3
+rutas `/api/stripe/webhook` dinamicas).** T14 E2E manual queda pendiente de las keys de
+test del usuario, igual que C5 de T13.
 
-Decisiones T11 ya tomadas y probadas (han dejado de estar abiertas): la limpieza perezosa
-usa `expire_stale_holds` EN LA MISMA transaccion del `INSERT` (dos sentencias separadas,
-no un CTE; probado "de la manga" en `route.db.test.ts`), y el overlay de `bookings` en
-`GET /api/availability` entro en T11 y esta probado en `route.db.test.ts` (6 casos nuevos).
+**Pendiente en T14 (usuario):** verificacion manual E2E unitaria + E2E manual Stripe del
+runbook (comparten `.env.local` de test). Sin `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`
+y `stripe login` no se puede completar; todo lo automatizable esta automatizado.
 
-Pendiente de decision de T12 (no bloquea, se decide al llegar): la cookie `frasapp_session`
-sigue sin firma verificada; el `sub` solo atribuye (FN a `auth.users` frena los uuid
-inventados). El gestor y el socio reales siguen por decidir en las tareas de UI.
+**T13 cerrada en codigo** (spec aprobada 2026-09-28, `docs/specs/t13-stripe-connect.md`).
+
+**T13 avanza:** C1 (migracion `tenant_members` + seed gestor demo, 13 tests DB), C2 (lib
+`stripe-connect.ts`, 9 tests DB, `COMISION_PLATAFORMA_CENTS=0` anclada), C3 (rutas
+`onboard`/`return`/`webhook`, 14 tests DB) y C4 (pantalla `/admin/pagos`, 30 unitarios con
+`subDeValor`, e2e `admin-pagos.spec.ts`) implementados y en verde. Verificacion completa al
+cierre de C4: `test:db` 273/273, 30 unitarios, typecheck y lint 0, build con las 3 rutas,
+e2e 5/5 (smoke + 4 de la pantalla).
+
+**Pendiente de C5 (usuario):** la **verificacion manual E2E con Stripe CLI en test mode**
+del runbook de la spec. Requiere el `stripe` logado y las keys de test en `.env.local`
+(hoy estan vacias y el CLI no tiene cuenta configurada; no se puede completar sin las
+credenciales del usuario). Todo lo automatizable esta automatizado.
+
+**Hecho el 2026-09-28:** commits `2564f4d` (spec), `042ddb0` (C1), `9fbf8e2` (C2),
+`9fd85c5` (C3), `3ae8c24` (C4) y `315a979` (fix: check-encoding ignora `.claude/`).
+`pnpm verify` raiz en verde: encoding 0, typecheck 0, lint 0 (`--max-warnings 0`),
+30 unitarios, 152 de cobertura en `core`, 273 de integracion y build. `detect-changes`:
+10 ficheros / 21 simbolos / 4 flujos, risk medio, flujos cubiertos por las suites.
+Memorias sin commitear (regla).
+
+**T14 cerrada E1-E4 el 2026-09-28:** spec `docs/specs/t14-payment-intent.md` y
+`tasks/todo.md` con el desglose E1-E4. E1 migracion `20260930000000_payments_intent.sql`
+(checks con `is not distinct from` + indice unico parcial de PaymentIntent + test del
+agujero NULL) `0ad6524`; E2 `POST /api/payments/intent` con `cobrarHold` y fake derivando
+el intent del idempotency key (11 tests) `2d1b658`; E3 webhook idempotente de
+`payment_intent.succeeded`/`payment_failed` (9 tests; idempotencia por guarda de estado,
+T14-F) `5386f82`; fix BOM de un test `70f870f`; spec corregida a la forma fuerte
+`is not distinct from` `1cce04f`. `pnpm verify` raiz unico: 300 DB (18 ficheros), 91
+unitarios, 152 core, 0 typecheck/lint/encoding. `detect-changes` en E3: 7 ficheros / 21
+simbolos / 0 procesos / risk low. `confirmed_at` y `cancelled_at` salen como `Date` de pg
+(timestamptz): comparar con `toEqual`, no `toBe`.
+
+**T14b cerrada E1-E3 el 2026-09-29:** spec `docs/specs/t14b-cancel-refund.md` `c14570a`
+(ocho decisiones cerradas: T14b-A `pending_payment` -> 409, B dueno o gestor, C
+`Idempotency-Key` `reembolso_<bookingId>` compartida, D primero se cancela y se committea y
+despues se pide el dinero, E `/refund` solo sobre `cancelled`+`paid`+0, F el cuerpo se
+ignora, G 3 estados sin `partially_refunded`, H `refunded` solo con importe). E1
+`src/lib/server/cancelaciones.ts` con `cancelarReserva` y `reembolsarCancelada` (21 tests
+DB) `c49af41`; E2 `POST /api/bookings/[id]/cancel` (13 tests DB, matriz 1-14) `3b98bcb`; E3
+`POST /api/bookings/[id]/refund` (11 tests DB, matriz 15-19 y el caso 11 cerrado) `90177c6`.
+`pnpm verify` raiz: exit 0, 7/7 tareas, 345 tests DB en 21 ficheros, 221 unitarios,
+build con las 5 rutas. `detect-changes` antes de cada commit: risk low, 0 procesos.
+Queda solo el E2E manual con Stripe CLI, bloqueado por las keys de test del usuario.
+
+Dos decisiones que no estaban en la spec y las fijaron los tests: (1) la cancelacion con
+Stripe caido responde **200 con `reembolso.pendiente: true`**, no 500, porque la
+cancelacion ya esta commitada y un 500 diria al socio que no se cancelo; en `/refund` el
+mismo fallo si es 500 porque ahi no hay nada commitado. (2) El importe del reintento sale
+del snapshot, y hay un test que sube la politica al 100% entre la cancelacion y el
+reintento para que el 50% del snapshot gane.
+
+Decisiones T13 ya tomadas y probadas que salen de la spec aprobada: gestor = fila en
+`tenant_members(tenant_id, user_id, role)` con `check (role='gestor')` y RLS completa; el
+paquete `stripe` de npm (22.6.2) y el CLI de Stripe (1.52.0, instalado con permiso) para el
+E2E del webhook en test mode; la cuenta Express se reutiliza; `return` sincroniza estado
+antes del 302; el webhook de T13 maneja firma + `account.updated` y hace ACK de cualquier
+otro evento (los de `payment_intent.*` entran en T14); `COMISION_PLATAFORMA_CENTS = 0`
+anclada con test (el test del PaymentIntent sin `application_fee_amount` se copio a T14).
 
 ## Current Phase
 
@@ -302,6 +358,10 @@ VERI\*FACTU que solo aplica al modulo de facturacion (fuera del MVP).
 | `toHaveLength(1)` en el aislamiento de `courts` | 1 | Copiado del test de tenancy, donde cada tenant tiene una fila. En T4 el tenant A tiene tres. Los numeros esperados salen de contar los fixtures, en un mapa explicito |
 | `no se pudo determinar el tipo del parametro $1` | 1 | Al generalizar el UPDATE de RLS a un bucle sobre dos tablas se perdio el `where tenant_id = $1`, y `$1` sin usar no tiene tipo. La query ya no hacia lo que el test decia |
 | Dos caracteres CJK escritos a proposito en `findings.md` al redactar una entrada | 1 | Se colaron al escribir el texto, no por corrupcion de codificacion. `scripts/check-encoding.mjs` los senalo y se corrigieron antes de commitear. Es el fallo que el checker existe para cazar, y cazo el suyo |
+| `U+00CD` (`Si` con mayuscula y tilde) en `progress.md` | 1 | La allowlist de `check-encoding` no admite mayuscula acentuada. Reescrito en minuscula. Lo pillo el checker, no el test |
+| Fixture de E2 moviendo cada reserva a un dia distinto: los tramos de la politica salian todos al 100% | 1 | El truco de "un dia por caso" de la ruta de pagos no vale cuando lo que decides depende de las horas que faltan. Cada caso siembra en su propia pista y en el instante exacto |
+| `body: undefined` no compila en el helper de peticion de los tests de ruta | 1 | `exactOptionalPropertyTypes: true` exige condicionar la propiedad entera con spread, no darle `undefined` |
+| `pnpm verify` encadenado con tuberia se quedo 15 min sin salida y sin terminar | 1 | Los 7 pasos por separado, todos en verde, y despues el mismo `verify` escribiendo a fichero: exit 0. El problema era la tuberia, no la suite |
 
 ## Notes
 

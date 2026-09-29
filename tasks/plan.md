@@ -178,13 +178,17 @@ en la tarea que lo implementa.
 
 ### Fase 3: Reservas y pago
 
-- [ ] **T9** Migracion `bookings` + `btree_gist` + `EXCLUDE` + limpieza perezosa (5 archivos, M)
-- [ ] **T10** Test de concurrencia de holds con TDD (3 archivos, S)
-- [ ] **T11** `POST /api/holds` + `DELETE /api/holds` (4 archivos, M)
-- [ ] **T12** `pricing_rules` + endpoint de disponibilidad con precio (4 archivos, M)
-- [ ] **T13** Stripe Connect, onboarding y `/admin/pagos` (6 archivos, M, dividido en 2)
-- [ ] **T14** `POST /api/payments/intent` + webhook + idempotencia (5 archivos, M)
-- [ ] **T14b** **Cancelar reserva confirmada y reembolsar** (4 archivos, M) — *añadido*
+- [x] **T9** Migracion `bookings` + `btree_gist` + `EXCLUDE` + limpieza perezosa (5 archivos, M)
+- [x] **T10** Test de concurrencia de holds con TDD (3 archivos, S)
+- [x] **T11** `POST /api/holds` + `DELETE /api/holds` (4 archivos, M)
+- [x] **T12** `pricing_rules` + endpoint de disponibilidad con precio (4 archivos, M)
+- [x] **T13** Stripe Connect, onboarding y `/admin/pagos` (cerrada en codigo el 2026-09-28;
+      queda el E2E manual C5 con keys del usuario)
+- [x] **T14** `POST /api/payments/intent` + webhook + idempotencia (cerrada en codigo E1-E4;
+      E2E manual Stripe pendiente de keys del usuario)
+- [x] **T14b** **Cancelar reserva confirmada y reembolsar** (cerrada en codigo E1-E3: lib
+      `cancelaciones.ts` + rutas `/cancel` y `/refund`, 45 tests DB; E2E manual Stripe
+      pendiente de keys del usuario)
 - [ ] **T14c** **Verificacion de menores en servidor** (3 archivos, S) — *añadido*
 
 ### Checkpoint 3 — Reserva y pago
@@ -199,12 +203,14 @@ en la tarea que lo implementa.
 
 ### Checkpoint 3b — Reembolso
 
-- [ ] **Cancelar una reserva pagada devuelve el importe del tramo correcto, verificado
-      de punta a punta contra Stripe** (no solo la funcion pura de T8)
-- [ ] Los 5 casos de la tabla pasan de `computeRefund` al reembolso real
-- [ ] El snapshot del tramo queda en el booking aunque la politica cambie despues
-- [ ] Cancelar dos veces no devuelve el doble
-- [ ] El slot se libera
+- [x] **Cancelar una reserva pagada devuelve el importe del tramo correcto, verificado
+      de punta a punta** (motor T8 -> fila -> `stripe.refunds.create` con cliente falso;
+      la llamada real a Stripe espera las keys de test del usuario)
+- [x] Los 5 casos de la tabla pasan de `computeRefund` al reembolso que pide Stripe
+- [x] El snapshot del tramo queda en el booking aunque la politica cambie despues
+      (probado cambiando la politica al 100% entre la cancelacion y el reintento)
+- [x] Cancelar dos veces no devuelve el doble
+- [x] El slot se libera
 
 ### Fase 4: Partidos, invitaciones, noticias y pantallas
 

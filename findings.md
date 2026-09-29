@@ -1226,3 +1226,218 @@ de decisión (documentada en el propio fichero); el `sub` solo sirve para ATRIBU
 `bookings.user_id` → FK a `auth.users` rechaza con 401 un uuid que no sea una persona. Un
 atacante puede suplantar la cookie, pero no reservar en otro club ni liberar el hold de
 otro socio.
+
+## T12: `pricing_rules` + disponibilidad con precio (cerrada)
+
+### Decisiones de diseño ejecutadas
+
+- **El `AvailabilitySlot` del core se queda sin precio; el precio se pega en la capa de
+  app** (`SlotConPrecio extends AvailabilitySlot`). El motor de disponibilidad no debe
+  saber de precios (contrato del core) y la rejilla pública y el hold comparten
+  `disponibilidadDePista`, el único lugar que pregunta "qué ocupa la pista este día".
+- **La rejilla cobra con `courts.num_players` (default 4); el hold recalcula con el
+  `numPlayers` del socio.** Por eso `reglas` viaja en `DisponibilidadPista`: quien hace el
+  hold conoce a la persona y afina el factor, y el número que el socio vio al elegir
+  coincide con lo que paga.
+- **El `409` y el `hold` usan las reglas REALES de la base** (ya no `rules: []`), así el
+  precio del 409 y el de la rejilla no pueden divergir. Sin `ruleId` en la respuesta
+  pública: el label del breakdown ES el nombre de la tarifa.
+- **Sin flag nuevo**: disponibilidad es pública y las 7 feature keys de la spec no cubren
+  precios. **Flash**: los fixtures de rules no se siembran en seed (no lo pedían los
+  criterios; el demo cae a tarifa base).
+
+### Errores reales encontrados (y cómo quedan documentados)
+
+1. **Postgres NO permite subconsultas en un `CHECK`** (`select bool_and(...) from
+   unnest(day_of_week)`). La primera versión de la migración falló en `db:reset`. Se
+   sustituye por contención de array: `day_of_week <@ array[0,1,2,3,4,5,6]::int[]`. El
+   array vacío está contenido por cualquier array, así que `{}` = "todos los días" pasa
+   igual.
+2. **`time` y `date` de pg se serializan en node-pg como `HH:MM:SS` y `Date`.**
+   `resolvePrice` exige `HH:MM` y `YYYY-MM-DD` en su contrato, y un `Date` se compara mal
+   en `vivaEn` (Date > "2026-06-15" da `NaN` y la regla parece viva). El `select` de
+   reglas convierte con `to_char(start_time, 'HH24:MI')` y `to_char(valid_from,
+   'YYYY-MM-DD')` (que devuelve null con null). El test de `PriceQuote` idéntico entre API
+   y motor falló exactamente por esto antes del fix.
+3. **Un fixture `withAdmin` (sin rollback) que siembre filas en los tenants del harness
+   rompe el aislamiento de otro fichero.** Los fixtures de `pricing-rules.db.test.ts`
+   insertaban courts para `TENANT_IDS.a/b` y `courts.db.test.ts` dejó de ver 3/1 pistas
+   (3→4, 1→2). El `afterAll` borra ahora por id, igual que hace `db.db.test.ts`. Regla:
+   si un fichero COMMITEA filas de harness, tiene la obligación de borrarlas.
+4. **`gen_random_uuid()` como `tenant_id` cae por la FK a `tenants`** si es el id de una
+   regla "acepta": el tenant debe existir (la FK de coherencia es el punto). Los tests
+   "acepta" corren con `withTenant` (rollback), y los fixtures vuelan con
+   `withTenant`/`withAdmin` según necesiten persistir.
+5. **`withTenant` revierte siempre** (db-harness, línea ~136); `withAdmin` no. Los inserts
+   transitorios válidos NO pueden ser `withAdmin` o contaminan el recuento del aislamiento
+   en re-ejecuciones.
+6. Los fixture rules de T12 se reparten por DIAS distintos (lunes punta, martes
+   multiplicador, miércoles court_type, jueves court, viernes base, sábado duración) y los
+   tests usan AGOSTO, no junio: los bloques y reservas de los describes previos sobreviven
+   al test (withAdmin, sin rollback) y ya ocupan casi toda la ventana de junio. Solo el
+   test de la ventana de validez usa el lunes 2026-06-15, porque las reglas antigua
+   (valid_to 14) y futura (valid_from 16) están ancladas a junio.
+
+## T13: Stripe Connect (2026-09-28, C1-C4)
+
+### Decisiones de diseño ejecutadas
+
+- **La pantalla 20 nunca llama a Stripe.** `estadoConnectDelTenant` lee SOLO
+  `tenants.stripe_charges_enabled`/`payouts_enabled` por `baseQuery` (tenants no tiene
+  RLS): el panel decide "conectar" vs "conectado" a partir de la fila, no de un
+  round-trip a la API en cada visita. La autoridad final del estado es el webhook.
+- **El gestor se comprueba con `tenantQuery` y RLS real**, no con una query directa a
+  `tenants`: `esGestor` solo pregunta "quien de las filas que la politica deja ver es este `sub`?". Un gestor de B preguntado por A no ve su fila (matriz 8 de la spec),
+  probado 13/13.
+- **El cliente de Stripe se inyecta, y se construye DENTRO del `try` de cada ruta.**
+  `manejar*(request, client?)` con `const efectivo = client ?? crearClienteStripe()` en el
+  `try`: un fallo de arranque (key vacía en `.env.local`) cae al 500 genérico de la spec y
+  nunca escapa como error crudo. Un default param `client = crearClienteStripe()` lanzaría
+  ANTES de la primera línea del cuerpo, fuera del catch.
+- **`guardarCuenta` con `where stripe_account_id is null`** es la defensa de la carrera de
+  doble click: el primero escribe, el segundo no machaca y re-lee. La cuenta Express que el
+  perdedor acabara de crear queda huérfana en Stripe (coste residual aceptado en spec).
+- **`stripe_onboarding_completed_at` se pone SOLO en la transición** a
+  `charges_enabled = true`, y dentro del `case` del update, no en código.
+
+### Errores reales de esta sesión (los tres los pilló el e2e o una sonda, no la revisión)
+
+1. **`subDeCabecera` exige la cabecera completa; `cookies()` de `next/headers` devuelve el
+   valor desnombrado.** Pasarle el valor directo → regex no casa → `null` → la pantalla
+   redirigía a `/` incluso con el gestor correcto. Una sonda temporal (borrada) demostró
+   que la MISMA cadena funcionaba vía `request.headers.get("cookie")` y fallaba vía
+   `cookies()`. Fix: `subDeValor(valor)` para el valor crudo de `cookies()`, y
+   `subDeCabecera`/`subDeSesion` delegan en él para cabeceras completas. Ahora la página la
+   lee con `subDeValor`.
+2. **`fullyParallel: true` de Playwright también paraleliza los tests del MISMO fichero.**
+   Dos tests E2E que mutaban la misma fila (`stripe_charges_enabled` del demo) se pisaban y
+   `detect-changes` no hubiera visto nada: el fallo aparecía solo cuando el estado quedaba a
+   medias. Fix declarativo: `test.describe.configure({ mode: "serial" })`.
+3. **`getByRole("alert")` es strict-mode violation en una app de Next**: el
+   `#__next-route-announcer__` (role alert vacío, aria-live) que Next inyecta en cada
+   página. Se acota con `page.locator('p[role="alert"]')`.
+4. **El webhook necesita un secreto consistente para verificar firma en test sin key en
+   `.env.local`.** El valor real de `STRIPE_WEBHOOK_SECRET` es `""`, así que el fallback se
+   toma con `process.env["STRIPE_WEBHOOK_SECRET"] || "whsec_test_t13_solo_firma"`, no con
+   `??` (el `??` NO ve el string vacío y usaría el fallback de la spec siempre). El cliente
+   real nunca se instancia en los tests de ruta (se inyecta el falso) salvo en el camino
+   "sin client", que vuelve el 500 genérico.
+
+### Pendiente de usuario (C5)
+
+- Commits C1..C5 (uno por tarea, memorias fuera) y el e2e manual con Stripe CLI del
+  runbook de la spec (test mode): onboarding real en dashboard de Connect, `stripe listen`
+  + `stripe trigger account.updated`. Las keys de `.env.local` están vacías hoy.
+
+## T14: PaymentIntent + webhook (2026-09-28, E1-E4 en código)
+
+### Decisiones de diseño ejecutadas
+
+- **La idempotencia del webhook es por GUARDA DE ESTADO, no por `event.id`.** El UPDATE de
+  `succeeded`/`payment_failed` lleva `where status = 'pending_payment'`: un replay del MISMO
+  evento, o un evento tardío de un intent ya cerrado, es un no-op declarado (el estado no lo
+  permite), sin tabla de dedupe. `audit_log` (T19) guardará el historial. Es T14-F y se
+  prueba reenviando el mismo `event.id` 3 veces y comprobando que `confirmed_at`/`cancelled_at`
+  no cambian.
+- **El webhook ejecuta `payment_intent.*` ANTES que `account.updated`** y ambos después de
+  la firma. El bind por `stripe_payment_intent_id` es seguro porque el índice único parcial
+  de E1 garantiza a lo sumo una fila por intent.
+- **`POST /api/payments/intent` es el UNICO endpoint de cobro** (T14-A absorbe el cobro que
+  T10 había puesto en `POST /api/bookings`). Importe sólo del snapshot `price_cents`; 503
+  `tenant_payments_not_ready` ANTES de llamar a Stripe.
+- **`cobrarHold` hace el pago y el cierre de la reserva en el mismo paso, con carrera
+  resuelta por UPDATE+relectura:** crea el intent y hace `update ... where id=$1 and
+  status='held'`; si 0 filas, re-lee para devolver `cobro_recuperado` (el intent perdedor de
+  una carrera) o `ya_pagado`.
+- **`is not distinct from` en vez de `=` en los checks de pagos.** Con `status <>
+  'pending_payment' or payment_status = 'unpaid'`, una fila con `payment_status` NULL evalúa
+  el OR a NULL y el `check` lo DEJA pasar. La forma `is not distinct from 'unpaid'` trata el
+  NULL como "no pagado" y cierra el agujero. El test "pending_payment sin payment_status
+  (NULL)" es el que lo obliga; la spec se corrigió tras E1 para reflejarlo.
+
+### Errores reales de esta sesión
+
+1. **pg devuelve `timestamptz` como objeto `Date`, no como string.** Comparar
+   `confirmed_at`/`cancelled_at` re-leídos con `toBe` falla con "Compared values have no
+   visual difference" aunque serialicen idéntico: son DOS objetos Date distintos, y `toBe`
+   es `Object.is`. Se compara con `toEqual` (compara fechas por valor).
+2. **El índice único parcial también pilla a los fakes**: el fake de `crearPaymentIntent`
+   que devolvía SIEMPRE `pi_falso_ruta` hacía que el segundo booking de un test chocara con
+   el índice de E1. El fake derivó su id del idempotency key (`pi_falso_${slice(-4)}`): el
+   que diseñó la prueba acabó diseñando el fixture.
+3. **El `EXCLUDE` también interfiere al sembrar fixtures**: dos bookings de casos distintos
+   con el MISMO slot morían con `bookings_no_overlap`. Cada booking del vector de casos
+   siembra en su PROPIO día (derivado del id), y el caso del slot liberado inserta a
+   propósito en el MISMO slot del failed para probar que la pista vuelve.
+4. **Quitar una función sin mirar su callgraph rompe a otra suite**: al mover `tenantQuery`,
+   `esGestor` dejó de compilar y T13 cayó con 10 fallos. Lo que el borrador del editor
+   escribe, el graph lo ve. (Mismo patrón que el hallazgo T5d.3: los errores de ensamblaje
+   los pilla el typecheck, no una suite aislada.)
+
+### Pendiente de usuario (E2E manual T14)
+
+- Verificación manual Stripe en test mode (comparte C5 de T13): `stripe trigger
+  payment_intent.succeeded` / `payment_intent.payment_failed` contra el webhook forwardeado,
+  y el cobro real recorriendo hold → pago → webhook. Requiere keys reales de test en
+  `.env.local` y `stripe login`. Sin credenciales del usuario no se puede completar.
+
+## Un test de rutas con el mismo dia para todos los casos rompe los tramos de la politica (T14b E2)
+
+La tabla de tramos de T14b se decide por `hoursBefore`, no por la fecha: 25h antes es
+100% y 5h antes es 0%. Los tests de ruta que ya existian esquivaban el `EXCLUDE
+bookings_no_overlap` moviendo cada fixture a un dia distinto (las dos ultimas cifras del
+id eligen el dia), un truco que en la ruta de pagos funciona porque ahi da igual cuando
+empieza la reserva.
+
+Al copiar el patron a E2, los tres tests de tramo fallaron a la vez y con el mismo
+sintoma: los 5h antes devolvian 100%. La causa no estaba en el codigo sino en el
+fixture: `inicio.setUTCDate(inicio.getUTCDate() + dia)` movia la reserva 1-15 dias hacia
+adelante, y "5 horas antes" se convertia en "5 dias antes", con lo que el motor cae en
+el primer tramo que encuentra. Cuanto mas caso cubriera el truco, mas lejos de su
+instinto caia el test.
+
+La regla que queda: **si lo que decides en el test depende de la DISTANCIA hasta un
+instante, no muevas la fecha del fixture**. Se separa por pista (una pista por caso) y se
+sembra en el instante exacto que el caso necesita. La distancia en el tiempo es un
+dato de entrada, igual que el estado o el importe; si la fixture lo deforma, el test
+miente sin que nada falle de forma evidente.
+
+## `exactOptionalPropertyTypes` tambien prohibe una propiedad presente con valor `undefined`
+
+El proyecto tiene `exactOptionalPropertyTypes: true`, y un `RequestInit` con
+`{ body: undefined }` no compila: no es "sin body", es "body presente y sin valor". La
+forma que si compila y hace lo que dice es condicionar la propiedad entera:
+
+```ts
+new Request(url, {
+  method: "POST",
+  headers,
+  ...(cuerpo === undefined ? {} : { body: JSON.stringify(cuerpo) }),
+})
+```
+
+Aparece en cualquier helper de test que mounts el cuerpo como opcional (`peticionDe` de
+E2 y de E3). `pnpm verify` lo caza en `typecheck` antes que los tests, asi que el sintoma
+fue un exit 2 de turbo con el error apuntando al test, no a la ruta.
+
+## El `catch` de la cancelacion es mas ancho que "Stripe fallo", y es a proposito (T14b E1)
+
+`cancelarReserva` envuelve en el mismo `try` la llamada a `crearReembolso` **y** el
+`tenantQuery` que marca el pago como `refunded`. Un fallo de la base de datos despues de
+que Stripe ya devolvio el dinero sale, por tanto, como `reembolso pendiente`: el socio ve
+"te devolvemos el 1200 cuando podamos" en vez de un 500.
+
+Se deja asi, con el motivo escrito en el codigo, y no es un descuido:
+
+- El Idempotency-Key es por reserva (`reembolso_<bookingId>`), asi que el reintento
+  `/refund` recupera el MISMO refund de Stripe. No hay doble dinero: hay, como mucho,
+  una reserva que dice "pendiente" cuando el dinero ya esta de vuelta, y se corrige al
+  reintentar.
+- La alternativa (dejar propagar el fallo de la UPDATE) convertiria un error de
+  postgres en un 500 con la cancelacion ya commitada, que es la mentira que la spec
+  prohibe explicitamente.
+
+El coste: un error de programacion en esa zona se disfraza de problema de Stripe. Si
+alguna vez hay que distinguir, el sitio es este `catch`, no las rutas: basta con
+envolver solo `crearReembolso` y dejar que el `tenantQuery` lance, porque el reintento
+ya es idempotente.

@@ -380,19 +380,151 @@ repetido**. regla: no escribir globs con `*` seguido de `/` dentro de comentario
   el `PriceQuote` que no era lo que yo pensaba, y dos tests de rechazo que no probaban
   su motivo.
 
-## Pendiente de accion del usuario
+## T13: Stripe Connect, onboarding y `/admin/pagos` (C1-C4 cerradas, C5 pendiente de usuario)
 
-`postgresql.conf` ya dice `listen_addresses = 'localhost'` (copia del original en
-`C:\Users\W10\AppData\Local\Temp\opencode\postgresql.conf.bak`), pero el servicio no se
-ha reiniciado, asi que el servidor sigue escuchando en `*` con clave `postgres`. El
-agente no puede elevarse: hace falta `Restart-Service postgresql-x64-17` en PowerShell
-como Administrador, y luego `show listen_addresses` para confirmar.
+Spec propia `docs/specs/t13-stripe-connect.md` aprobada el 2026-09-28. Desglose C1-C5.
 
-## Pendiente de decision
+**Verificacion al cierre de C4:** `pnpm test:db` **273/273**, `pnpm test` **30/30**,
+`pnpm typecheck` 0 errores, `pnpm lint` 0 (con `--max-warnings 0`), `pnpm build` con las 3
+rutas `/api/stripe/*` como dinamicas, `pnpm test:e2e` **5/5** (smoke + 4 de la pantalla 20),
+encoding limpio (solo los 3 avisos preexistentes de `.claude/`).
 
-`PaymentStatus` tiene 3 estados segun la spec, pero `amount_refunded_cents` y
-`refund_percent_applied` solo tienen sentido con devoluciones parciales y el tramo de 12h
-devuelve el 50%. No se ha inventado un `partially_refunded`: se decide antes de T14b.
+### Implementado
+
+- **C1**: migracion `20260929000000_tenant_members.sql` (tabla + check `role='gestor'` + FKs
+  a `tenants` y `auth.users` con `on delete cascade` + RLS `FORCE` con 4 politicas por
+  `current_tenant_id()`). Seed: persona `...0d1` en `auth.users` + miembro gestor del tenant
+  demo `...0001`. `tenant-members.db.test.ts` 13/13: matriz 1-8 de la spec, aislamiento
+  cross-tenant dentro de la misma transaccion, `array_to_string(roles)` para comparar el rol
+  de las politicas.
+- **C2**: `src/lib/server/stripe-connect.ts` con `StripeConnectClient` inyectable
+  (`crearCuentaExpress`/`obtenerAccountLink`/`obtenerCuenta`), `crearClienteStripe`,
+  `COMISION_PLATAFORMA_CENTS = 0` anclada con test propio, `cuentaExpressOIdExistente`
+  (reutiliza, `guardarCuenta` con `where stripe_account_id is null`), `sincronizarEstadoConnect`
+  (con el `case` que pone `stripe_onboarding_completed_at` solo en la transicion a charges),
+  `estadoConnectDelTenant` (solo lectura, lo que pinta la pantalla) y `esGestor` (por
+  `tenantQuery`, RLS real). `stripe-connect.db.test.ts` 9/9.
+- **C3**: rutas `onboard` (POST), `connect/return` (GET) y `webhook` (POST). En las tres el
+  cliente se construye DENTRO del `try` (`client ?? crearClienteStripe()`) para que un fallo
+  de arranque caiga al 500 generico de la spec y nunca escape crudo. `return?setup=complete`
+  sincroniza antes del 302. Webhook: 401 sin firma, `constructEvent` real, 200-ACK de eventos
+  ajenos (los `payment_intent.*` son T14). `stripe-connect.route.db.test.ts` 14/14 con
+  cliente falso inyectado, tenant propio `club-t13-a` y `clearTenantCache` (patron T5d/T11).
+- **C4**: `src/lib/server/session.ts` ahora exporta `subDeValor(valor)` (valor crudo de
+  `next/headers.cookies()`, sin el `frasapp_session=` delante) y `subDeCabecera(cookie)`
+  delega en el. `admin/layout.tsx` (minimo, `force-dynamic`), `admin/pagos/page.tsx`
+  (server: cookie → `esGestor` o `redirect("/")`, pinta pendiente/conectado) y
+  `admin/pagos/ConectarCobros.tsx` (cliente: POST onboard, abre `accountLinkUrl` en pestana
+  nueva, error generico sin jerga ni palabras tecnicas de Stripe).
+
+### Errores de esta sesion (los tres los pillo el e2e, no la revision)
+
+1. **`subDeCabecera` no sabe leer el valor desnombrado de `cookies()`.** `cookies()` de
+   `next/headers` devuelve el VALOR de la cookie, sin el `frasapp_session=` delante, y
+   `subDeCabecera` exige la cabecera completa (su regex no casa). La pantalla pasaba el valor
+   desnombrado y devolvia `null` → redirect a `/` incluso con el gestor correcto. Un `curl` a
+   una sonda (luego borrada) lo demostró: `subDesdeHeader` funcionaba y `subDesdeCookies`
+   era `null` con la MISMA cadena. No es un fallo de test sino un error de contrato de la
+   funcion; `subDeValor` lo separa por intencion.
+2. **Dos tests E2E que mutan la misma fila del tenant de demo corrian en paralelo.**
+   `requests: fullyParallel: true` en `playwright.config.ts` lanza en paralelo hasta los
+   tests del MISMO fichero: el que encendía `charges_enabled` y el que lo apagaba se pisaban
+   y el ganador veía el estado del vecino. El fix es declarativo: `test.describe.configure({ mode: "serial" })`.
+3. **`getByRole("alert")` es strict-mode violation en una app de Next**: el
+   `#__next-route-announcer__` (rol `alert` vacío, aria-live) que Next inyecta a cada página
+   rompe el locator. Se acota al `<p role="alert">` propio.
+
+### GitNexus y commits
+
+Commits hechos el 2026-09-28 (uno por tarea, memorias fuera): `2564f4d` spec T13,
+`042ddb0` C1, `9fbf8e2` C2, `9fd85c5` C3, `3ae8c24` C4, `315a979` fix que anade
+`.claude/` a `SKIP_DIRS` de `check-encoding` (sin el, el `verify` raiz moria en el primer
+paso desde que `.claude/skills/` se commiteo en `4b8f3f6`: antes eran untracked y el
+walker no los veia). `detect-changes` previo: 10 ficheros / 21 simbolos / 4 flujos, risk
+medio, los 4 flujos cubiertos por las suites verdes.
+
+`pnpm verify` raiz **en verde** tras el fix: encoding 0 problemas, typecheck 0, lint 0
+(`--max-warnings 0`), 30 unitarios, 152 de cobertura en `core`, 273 de integracion y
+build. Memorias sin commitear (regla).
+
+**C5 queda solo con la verificacion manual E2E con Stripe CLI** (runbook de la spec):
+`stripe login` y `stripe listen --forward-to http://localhost:3000/api/stripe/webhook`
++ `stripe trigger account.updated`, mas el onboarding real en la dashboard de Connect.
+Hoy esta bloqueada por credenciales que no existen en la maquina: `.env.local` tiene las
+variables de Stripe vacias y el CLI no tiene cuenta configurada (`~\.config\stripe` solo
+contiene `docs`). No se crea una cuenta Stripe en nombre del usuario: hace falta su
+email y el flujo de alta.
+
+## T14: PaymentIntent con destino al club + webhook idempotente (E1-E4 cerradas en codigo)
+
+Spec propia `docs/specs/t14-payment-intent.md` aprobada el 2026-09-28. Desglose E1-E4 en
+`tasks/todo.md`. TDD por E: test ROJO contra Postgres real, implementacion, suite completa,
+typecheck/lint/encoding, `detect-changes`, commit individual.
+
+**Verificacion E4 (raiz unica):** `pnpm verify` en verde — typecheck 0, lint 0, encoding 0,
+**300 tests DB** (18 ficheros), 91 unitarios, 152 core, build con las 3 rutas `/api/stripe/*`
+dinamicas. `detect-changes` en E3: 7 ficheros / 21 simbolos / 0 procesos / risk low.
+
+### E1 (commit `0ad6524`, spec `24ec616`)
+
+- Migracion `20260930000000_payments_intent.sql`: SIN columnas nuevas en `bookings`; checks
+  `bookings_pending_payment_needs_intent` (pending_payment => intent presente),
+  `bookings_pending_payment_unpaid` y `bookings_confirmed_is_paid` en forma FUERTE
+  `is not distinct from` (con `=` un `payment_status` NULL dejaba el check en NULL y lo
+  pasaba; el test del agujero NULL lo obliga). Indice unico parcial
+  `bookings_stripe_payment_intent_uidx` sobre `(tenant_id, stripe_payment_intent_id)`
+  `where stripe_payment_intent_id is not null`.
+- `src/lib/bookings.payments-intent.db.test.ts` 7/7. Fixtures de T9/T11 arreglados para
+  filas de pago coherentes: `reserva()` de `bookings.db.test.ts` autocontiene
+  `payment_status`/`stripe_payment_intent_id`; `reservar()` de `availability` tambien;
+  UPDATE de holds `[id]` (linea ~242) anade `payment_status='paid'` (y el test fue
+  reescrito sin BOM, `70f870f`, porque `Set-Content -Encoding utf8` de PS 5.1 mete BOM).
+
+### E2 (commit `2d1b658`)
+
+- `StripeConnectClient` ampliado en `stripe-connect.ts`: `crearPaymentIntent({amountCents,
+  currency, destination, idempotencyKey})` y `recuperarPaymentIntent(paymentIntentId)`;
+  impl real con `automatic_payment_methods` + `transfer_data.destination`, sin
+  `application_fee_amount` (`COMISION_PLATAFORMA_CENTS=0`). Nuevas `capacidadCobroDelTenant`
+  (baseQuery) y `cobrarHold(client, tenantId, sub, holdId)` con union discriminada
+  `CobroResultado` (cobro_iniciado/cobro_recuperado/ya_pagado/sin_hold/hold_expirado/
+  transicion_invalida/pagos_no_listos).
+- Ruta nueva `POST /api/payments/intent`: solo `hold_id` (validacion manual tipo holds,
+  claves extra descartadas), respuestas 200/404/409 (`hold_expired`)/503
+  (`tenant_payments_not_ready`).
+- `src/app/api/payments/payments-intent.route.db.test.ts` 11/11. El fake deriva
+  `pi_falso_${idempotencyKey.slice(-4)}` (el indice unico cazo duplicados); slots por dia
+  desde el id del booking (`parseInt(fila.id.slice(-2), 16)`) para no chocar con el EXCLUDE.
+- Autorreparado: el import de `tenantQuery` roto en el rebase rompio `esGestor` (10 fallos
+  de T13); fakes de T13 ampliados con los 2 metodos nuevos inertes.
+
+### E3 (commit `5386f82`)
+
+- Ramas `payment_intent.succeeded` / `payment_intent.payment_failed` en el webhook,
+  EJECUTADAS tras la firma y ANTES de `account.updated`. Bind por `stripe_payment_intent_id`
+  (index unico = a lo sumo una fila); booking sin intent => 200 ack.
+- **Idempotencia por guarda de estado (T14-F):** el UPDATE lleva `where status =
+  'pending_payment'`, asi los replays del MISMO `event.id` son no-op y un `succeeded` no
+  resucita un `cancelled`. `audit_log` es T19.
+- Test ampliado `stripe-connect.route.db.test.ts` a 23 casos: matriz E3 17-25 (succeeded
+  desde pending, replay 3x con `confirmed_at` estable, succeeded sin booking, no-resurreccion,
+  payment_failed, replay 3x, no-toca-confirmed, evento desconocido, slot liberado tras
+  failure). **Hallazgo:** pg devuelve `timestamptz` como objeto `Date`, no string —
+  comparar con `toEqual`, un `toBe` falla con "Compared values have no visual difference".
+- Seed nuevo: `court` para `TENANT_T13` (antes solo tenia tenant + miembro) y limpieza de
+  bookings en `afterAll` antes del borrado de tenants.
+
+### Spec alineada (commit `1cce04f`)
+
+El SQL de la spec usaba `= 'unpaid'`/`= 'paid'`; E1 endurecio la migracion a
+`is not distinct from`. La spec ahora refleja la forma final y por que (agujero NULL).
+
+### Pendiente de usuario
+
+E2E manual Stripe en test mode (comparte C5 de T13): keys de test en `.env.local` + `stripe
+login` + `stripe trigger payment_intent.succeeded` / `payment_intent.payment_failed` del
+runbook. Sin credenciales del usuario no se puede completar; todo lo automatizable esta
+automatizado.
 
 ---
 
@@ -735,3 +867,112 @@ Reindexado (1471 nodos, 2870 aristas, 57 clusters, 36 flows). `detect-changes`: 
 por diseño (`tenantQuery`/`claimsDe`/`abrirSesionTenant` son el eje único de aislamiento),
 14 flujos afectados (GET availability/courts, PistasPage, HomePage, CrearHold) y los 14
 verdes en test:db. Cambios aditivos, sin consumidor roto.
+
+## T12: `pricing_rules` + disponibilidad con precio (cerrada)
+
+Migracion `pricing_rules` (20260928000000), `pricing-rules.db.test.ts` (20 tests) y el
+precio por slot resuelto en servidor con `resolvePrice` y las reglas REALES, en
+`GET /api/availability` y en el 409/hold de `POST /api/holds`. Primer anclaje del precio
+en la API (spec 4.3, 5.1, 7.3).
+
+**Verificación:** `pnpm verify` en verde salvo los 3 avisos de encoding de siempre en
+`.claude/skills/`. `check:encoding`, typecheck raíz, lint 4/4, 25 unitarios,
+**237 de integración** (13 ficheros; 42 de availability "T12" + 12 extras en holds),
+cobertura 100% en `core` (cached) y build de Next verde.
+
+### Implementado
+
+- Migracion `apps/padel-template/supabase/migrations/20260928000000_pricing_rules.sql`:
+  `pricing_rules` con `tenant_id`, `scope` (`court`/`court_type`/`global`), `court_id`,
+  `court_type`, `day_of_week int[]`, `start_time`/`end_time`, `duration_min`,
+  `valid_from`/`valid_to`, `price_cents`, `player_multiplier` y el `check` de coherencia
+  de `scope` (una FK de coherencia `tenants` + el rango de `day_of_week` validado por
+  contención `day_of_week <@ array[0..6]::int[]`, porque Postgres NO permite subconsultas
+  en CHECK). RLS habilitada con políticas de aislamiento por tenant.
+- `src/lib/pricing-rules.db.test.ts` (nuevo): aislamiento, sin coherencia de scope,
+  acepta lo que `resolvePrice` puede resolver, rechaza precios/duraciones imposibles.
+  El `afterAll` borra `RULE_A`/`RULE_B` y `COURT_A`/`COURT_B` por id (withAdmin persiste
+  y rompía el aislamiento de `courts.db.test.ts`: 3→4 y 1→2).
+- `src/lib/server/disponibilidad.ts`: `SQL_REGLA` lee reglas con `to_char` en `time` y
+  `date`; `SlotConPrecio`/`DisponibilidadConPrecio` (extienden los tipos del core, que
+  quedan puros); `DisponibilidadPista` gana `reglas`; cada hueco se enriquece con
+  `resolvePrice({ numPlayers: pista.num_players })`. La rejilla se puede recobrar sin
+  precio (uso interno del pre-check de holds).
+- `src/lib/server/holds.ts`: `crearHold` y el 409 usan las reglas REALES (rejilla con
+  `num_players` de la pista; el hold recalcula con el `numPlayers` del cliente).
+  `alternativas` queda tipado `DisponibilidadConPrecio`. El 409 trae el precio ya
+  resuelto y el hold cobra la tarifa del día.
+- Tests: `availability/route.db.test.ts` describe "T12" con 9 reglas (ids terminados en
+  `5e5`..`5ee`, días distintos: lunes punta, martes multiplicador, miércoles court_type,
+  jueves court, viernes base, sábado duración; fechas AGOSTO porque junio ya lo ocupan los
+  fixtures permanentes de describes previos) + test de que el `PriceQuote` de la API
+  coincide con `resolvePrice` llamado directamente con las MISMAS reglas.
+  `holds/route.db.test.ts`: regla de jueves (2500), el 409 trae alternativas con precio
+  resuelto y el hold de jueves cobra 2500.
+
+### Errores de esta sesión (resueltos por TDD, ver `findings.md`)
+
+1. Migración con CHECK por subconsulta → `db:reset` rojo → contención de array.
+2. `resolvePrice` recibía `time` como `HH:MM:SS` y `date` como `Date` desde pg →
+   `NaN` en `vivaEn` → `to_char` en el SELECT de reglas y en el SQL del test directo.
+3. Fixtures `withAdmin` de pricing-rules (commiteados) contaminaban `courts.db.test.ts`.
+4. `gen_random_uuid()` como `tenant_id` resultaba en FK fail (bien: la coherencia es el
+   punto). Tests "acepta" con `withTenant` (rollback).
+5. `withTenant` no contamina; `withAdmin` sí. Remarcado en `findings.md`.
+
+### GitNexus
+
+`detect-changes`: "5 files, 26 symbols", risk high, flujos afectados `CrearHold` y
+disponibilidad — cubiertos por las suites verdes (237/237). Los 2 ficheros nuevos
+(untracked: migración y `pricing-rules.db.test.ts`) no se cuentan en el diff. Commit de
+T12 pendiente de que el usuario lo pida.
+
+## T14b: cancelar reserva confirmada y reembolsar (cerrada en codigo, E1-E3)
+
+**Spec:** `docs/specs/t14b-cancel-refund.md` aprobada el 2026-09-29 (`c14570a`). Decisiones
+que quedaban abiertas y se cerraron al escribirla: T14b-A (una `pending_payment` NO se
+cancela por aqui: 409, el cobro esta en curso y compite con el webhook), T14b-B (dueno o
+gestor cancelan), T14b-C (una sola `Idempotency-Key` por reserva, `reembolso_<bookingId>`,
+compartida por la cancelacion y el reintento), T14b-D (primero se cancela y se committea,
+despues se pide el dinero a Stripe), T14b-E (`/refund` solo sobre `cancelled` + `paid` +
+`amount_refunded_cents = 0`), T14b-F (el importe sale de `price_cents` y del reloj del
+servidor; el cuerpo del cliente se ignora), T14b-G (3 estados, sin `partially_refunded`) y
+T14b-H (`refunded` solo con importe: un tramo del 0% deja el pago en `paid`).
+
+### Commits
+
+- `c14570a` spec T14b.
+- `c49af41` E1 `src/lib/server/cancelaciones.ts` + 21 tests DB (motor cableado a Postgres
+  real, snapshot, titularidad, guardas, Stripe caido, politica ausente/invalida).
+- `3b98bcb` E2 `POST /api/bookings/[id]/cancel` + 13 tests DB (matriz 1-14 completa a nivel
+  HTTP, incluido el slot que vuelve por el `EXCLUDE`).
+- `90177c6` E3 `POST /api/bookings/[id]/refund` + 11 tests DB (matriz 15-19, mas el caso 11
+  cerrado: cancelar con Stripe caido, cambiar la politica y reintentar con el gestor).
+
+### Verificacion
+
+`pnpm verify` raiz unico: exit 0, 7/7 tareas de turbo. Encoding 0, typecheck 0, lint 0
+(`--max-warnings 0`), 221 unitarios (19 config-schema + 152 core + 20 UI + 30 app), 345
+tests DB en 21 ficheros, build con las 5 rutas dinamicas (nuevas: `/api/bookings/[id]/cancel`
+y `/api/bookings/[id]/refund`). `detect-changes` antes de cada commit: 5 ficheros de
+memorias, 25 simbolos, 0 procesos afectados, risk low (los ficheros de codigo nuevos estan
+untracked y el indice de grafo no los ve todavia).
+
+### Lo que decide la implementacion y merece recordarse
+
+- La cancelacion devuelve **200 con `reembolso.pendiente: true`** cuando Stripe falla, no
+  un 500: la cancelacion ya esta commitada y un 500 diria al socio que no se cancelo,
+  dejandole la reserva `confirmed` con la pista ocupada. En `/refund` el mismo fallo si es
+  un 500, porque ahi no hay nada commitado todavia y la fila se queda reintentable.
+- El importe de `/refund` sale del snapshot (`refund_percent_applied`), nunca de la
+  politica de ahora. El test de E3 lo demuestra cambiando la politica al 100% entre la
+  cancelacion y el reintento: devuelve el 50% del snapshot.
+- Los tests de ruta siembran **una pista por caso**, no un dia distinto por caso (como los
+  de la ruta de pagos): el tramo lo decide `hoursBefore`, y mover la reserva unos dias la
+  echaria de cabeza al tramo del 100% sin que nadie lo tocase.
+
+### Pendiente del usuario
+
+- E2E manual con Stripe CLI (mismo bloqueo que C5 de T13 y el E2E de T14): hace falta
+  `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` de test y `stripe login`.
+- La UI de cancelar (`/reservas` con el boton) es T18b/T18f, fuera del alcance de T14b.

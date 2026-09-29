@@ -394,63 +394,117 @@ perezosa dentro de la misma transaccion que el `INSERT`.
 
 ---
 
-### [ ] T12: `pricing_rules` + disponibilidad con precio
+### [x] T12: `pricing_rules` + disponibilidad con precio
+**Hecho:** migracion `20260928000000_pricing_rules.sql`, `pricing-rules.db.test.ts` (20
+tests DB) y precio por slot en `GET /api/availability` y en el hold/409, resuelto con
+`resolvePrice` y las reglas REALES leidas con la misma RLS. Suite completa verde
+(`test:db` 237/237), typecheck, lint, encoding (solo los 3 avisos preexistentes de
+`.claude/`) y build OK.
 **Spec:** secciones 4.3, 5.1, 7.3
 
 **Descripcion:** Migracion de `pricing_rules` y el endpoint de disponibilidad que ya
 devuelve el precio resuelto por `resolvePrice`. **Todos los precios vienen del servidor.**
 
 **Criterios de aceptacion:**
-- [ ] `pricing_rules` con `check` de coherencia de `scope`
-- [ ] La disponibilidad devuelve el precio de cada slot, resuelto en servidor
-- [ ] El cliente **no** puede enviar precio. Un precio en el body se descarta
-- [ ] El desglose devuelto incluye el nombre de la tarifa aplicada, para el panel
+- [x] `pricing_rules` con `check` de coherencia de `scope`
+- [x] La disponibilidad devuelve el precio de cada slot, resuelto en servidor
+- [x] El cliente **no** puede enviar precio. Un precio en el body se descarta
+- [x] El desglose devuelto incluye el nombre de la tarifa aplicada, para el panel
+
+**Notas de implementacion (recordar en `findings.md`):**
+- Postgres NO permite subconsultas en un `CHECK`: el rango de `day_of_week` se valida con
+  `day_of_week <@ array[0..6]` (el array vacio queda contenido = "todos los dias").
+- `time` y `date` de pg se serializan en node-pg como `HH:MM:SS` y `Date`: el `select` de
+  reglas convierte con `to_char(..., 'HH24:MI')` y `to_char(..., 'YYYY-MM-DD')` para que
+  `resolvePrice` reciba exactamente lo que su contrato guarda.
+- La rejilla cobra con `courts.num_players` (default 4); el hold recalcula con el
+  `numPlayers` del socio y por eso `reglas` viaja en `DisponibilidadPista`.
+- Un fixture `withAdmin` (sin rollback) que sembre filas en los tenants del harness
+  rompia el aislamiento de `courts.db.test.ts` (3->4, 1->2): `afterAll` borra las filas
+  por id, igual que `db.db.test.ts`.
 
 **Verificacion:** tests de endpoint · test de que el `PriceQuote` de la API coincide con
-`resolvePrice` llamado directamente
+`resolvePrice` llamado directamente (los dos con las MISMAS reglas de la base)
 
 **Depende de:** T7, T5 · **Alcance:** M
 
 ---
 
 ### [ ] T13: Stripe Connect, onboarding y `/admin/pagos` `[SEG]`
-**Spec:** secciones 4.1, 5.2, 6.3 (pantalla 20), 7.6
+**Spec:** secciones 4.1, 5.2, 6.3 (pantalla 20), 7.6 · **Spec propia:** `docs/specs/t13-stripe-connect.md`
+aprobada el 2026-09-28
 
 **Descripcion:** Cuentas Express, Account Links, webhook `account.updated`, y la pantalla
 `/admin/pagos`. **Bloqueante del MVP:** sin esto el club no cobra.
 
+**Decisiones cerradas (spec T13):**
+- Gestor = fila en `tenant_members(tenant_id, user_id, role)` con `check (role='gestor')`,
+  RLS completa. Un solo rol, sin niveles.
+- `stripe` de npm instalado (22.6.2). Stripe CLI 1.52.0 instalado (winget, permitido).
+- Cuenta Express se reutiliza (un Account Link nuevo por click, nunca cuenta nueva).
+- `GET /api/stripe/connect/return` sincroniza estado con Stripe antes del 302.
+- Webhook: firma + `account.updated`; cualquier otro evento 200 sin efectos (T14).
+- `COMISION_PLATAFORMA_CENTS = 0` anclada con test; criterio de `application_fee_amount`
+  copiado a T14.
+
 **Criterios de aceptacion:**
-- [ ] `POST /api/stripe/connect/onboard` crea la cuenta Express y devuelve el Account Link
-- [ ] `GET /api/stripe/connect/return?setup=complete` cierra el flujo
-- [ ] `account.updated` actualiza `stripe_charges_enabled` y `stripe_payouts_enabled`
-- [ ] `/admin/pagos` muestra "Conectar los cobros de mi club" y luego "Los cobros estan
-      conectados"
-- [ ] Copy sin jerga. Cero palabras tecnicas en pantalla
-- [ ] `application_fee_cents` a 0: el club no paga comision
+- [x] `POST /api/stripe/connect/onboard` crea la cuenta Express y devuelve el Account Link
+      (probado con cliente falso inyectado; el camino real es el E2E manual de C5)
+- [x] `GET /api/stripe/connect/return?setup=complete` cierra el flujo (sincroniza y 302)
+- [x] `account.updated` actualiza `stripe_charges_enabled` y `stripe_payouts_enabled`
+      (idempotente, 200-ACK del resto; los `payment_intent.*` son T14)
+- [x] `/admin/pagos` muestra "Conectar los cobros de mi club" y luego "Los cobros estan
+      conectados" (e2e 375x667 en los dos estados)
+- [x] Copy sin jerga. Cero palabras tecnicas en pantalla. El fallo de Stripe se resume en
+      la frase generica de la spec, verificado en e2e
+- [x] `COMISION_PLATAFORMA_CENTS = 0` con test que falla si cambia
 
-**Verificacion:** E2E del onboarding con Stripe CLI · test de que el panel refleja el
-estado real de Connect
+**Verificacion:** E2E automatizado en verde (5/5). **E2E manual con Stripe CLI en test
+mode pendiente de hacer con el usuario** (runbook de la spec): `stripe listen --forward-to
+http://localhost:3000/api/stripe/webhook` + `stripe trigger account.updated` y el flujo de
+onboarding real en la dashboard de Connect. Las keys de `.env.local` estan vacias hoy.
 
-**Depende de:** T12 · **Alcance:** L (dividir si el E2E se resiste)
+**Plan (desglose, un commit por tarea):**
+- [x] C1: migracion `20260929000000_tenant_members.sql` + seed gestor demo +
+      `tenant-members.db.test.ts` (matriz 1-8) — 13/13, commit `042ddb0`
+- [x] C2: lib `stripe-connect.ts` (StripeConnectClient inyectable, `COMISION_PLATAFORMA_CENTS`,
+      `cuentaExpressOIdExistente`, `sincronizarEstadoConnect`, `esGestor`,
+      `estadoConnectDelTenant`) + db tests — 9/9, commit `9fbf8e2`
+- [x] C3: rutas `onboard`, `return`, `webhook` + `route.db.test.ts` (matriz rutas 1-14) — 14/14,
+      commit `9fd85c5`
+- [x] C4: `admin/layout.tsx`, `admin/pagos/page.tsx`, `ConectarCobros.tsx` + `subDeValor`
+      en `session.ts` → unitarios 30/30 y e2e `admin-pagos.spec.ts` 4/4 (serial),
+      commit `3ae8c24`
+- [ ] C5: E2E con Stripe CLI (test mode) + verificación completa + gitnexus detect-changes
+      — automatizado y `verify` raiz verde (incluye `detect-changes`); **solo falta el E2E
+      manual, bloqueado por las keys de test del usuario** (`.env.local` vacio, CLI sin
+      cuenta configurada)
+
+**Depende de:** T12 · **Alcance:** L (dividido en 5 commits, 4 hechos + spec `2564f4d`)
 
 ---
 
-### [ ] T14: Pago con intent + webhook idempotente `[TDD]` `[SEG]`
-**Spec:** secciones 5.2, 6.2, 7.6
+### [x] T14: Pago con intent + webhook idempotente `[TDD]` `[SEG]`
+**Spec:** secciones 5.2, 6.2, 7.6 · **Spec propia:** `docs/specs/t14-payment-intent.md`
 
 **Descripcion:** `POST /api/payments/intent` con `transfer_data.destination` al club, y el
 webhook que confirma la reserva. **El navegador nunca confirma un pago.**
 
-**Criterios de aceptacion:**
-- [ ] El importe lo calcula el servidor. Un importe del cliente se descarta
-- [ ] `transfer_data.destination` = `tenants.stripe_account_id`
-- [ ] **No lleva `application_fee_amount` mientras la comision sea 0**
-- [ ] Si `stripe_charges_enabled = false`: 503 `tenant_payments_not_ready`, no un error
+**Criterios de aceptacion:** — CERRADA EN CODIGO E1-E4 (2026-09-28): E1 migracion + checks
+fuertes + indice unico (`0ad6524`), E2 endpoint de cobro (`2d1b658`), E3 webhook idempotente
+(`5386f82`), spec alineada al agujero NULL (`1cce04f`). `pnpm verify` raiz 300 DB/91
+unit/152 core/0. Falta solo el E2E manual con Stripe CLI (keys del usuario, comparte C5 de
+T13).
+- [x] El importe lo calcula el servidor. Un importe del cliente se descarta
+- [x] `transfer_data.destination` = `tenants.stripe_account_id`
+- [x] **No lleva `application_fee_amount` mientras la comision sea 0**
+- [x] Si `stripe_charges_enabled = false`: 503 `tenant_payments_not_ready`, no un error
       crudo de Stripe
-- [ ] El webhook sin firma valida devuelve 401
-- [ ] `payment_intent.succeeded` -> `confirmed` + `paid`
-- [ ] Reprocesar el mismo `event.id` no duplica efectos
-- [ ] `payment_intent.payment_failed` -> `cancelled` y libera el slot
+- [x] El webhook sin firma valida devuelve 401 (regresion T13 + caso 27)
+- [x] `payment_intent.succeeded` -> `confirmed` + `paid`
+- [x] Reprocesar el mismo `event.id` no duplica efectos (guarda de estado, T14-F)
+- [x] `payment_intent.payment_failed` -> `cancelled` y libera el slot
+- [ ] **Pendiente de usuario:** E2E manual Stripe CLI (`stripe trigger payment_intent.*`)
 
 **Verificacion:** tests con Stripe CLI · test de idempotencia con el mismo `event.id`
 enviado 3 veces
@@ -470,8 +524,12 @@ enviado 3 veces
 
 ---
 
-### [ ] T14b: Cancelar reserva confirmada y reembolsar `[TDD]` `[SEG]`
+### [x] T14b: Cancelar reserva confirmada y reembolsar `[TDD]` `[SEG]`
 **Spec:** secciones 5.1 (`/cancel`), 5.2 (`/refund`), 4.1 (`cancellation_policy`), 7.6
+**Cerrada en codigo 2026-09-29:** `c14570a` (spec), `c49af41` (E1 lib + 21 tests DB),
+`3b98bcb` (E2 ruta cancel + 13 tests DB), `90177c6` (E3 ruta refund + 11 tests DB).
+**Sigue pendiente:** solo el E2E manual con Stripe CLI (keys de test del usuario), que no
+es codigo. La UI de cancelar es T18b/T18f.
 
 **Descripcion:** `POST /api/bookings/[id]/cancel` y `POST /api/bookings/[id]/refund`. Es la
 tarea que **consume `computeRefund` de T8 en produccion**. Sin ella, los tramos de
@@ -479,42 +537,49 @@ reembolso que se construyeron con tanto cuidado no tienen quien los use: la logi
 y nadie la ejecutaria. T8 es la funcion pura; esta es el cableado.
 
 **Criterios de aceptacion:**
-- [ ] `POST /api/bookings/[id]/cancel` cancela la reserva y **dispara el reembolso con
+- [x] `POST /api/bookings/[id]/cancel` cancela la reserva y **dispara el reembolso con
       `computeRefund`**, leyendo los tramos de `tenant_content['cancellation_policy']`
-- [ ] `POST /api/bookings/[id]/refund` permite al gestor ejecutar el mismo reembolso
+- [x] `POST /api/bookings/[id]/refund` permite al gestor ejecutar el mismo reembolso
       (o el socio cancelar la suya)
-- [ ] Solo el dueno de la reserva o un gestor puede cancelar. Un tercero recibe 404
-- [ ] **Guarda el snapshot**: `refund_tier_hours_before` y `refund_percent_applied` en el
+- [x] Solo el dueno de la reserva o un gestor puede cancelar. Un tercero recibe 404
+- [x] **Guarda el snapshot**: `refund_tier_hours_before` y `refund_percent_applied` en el
       booking. Si el club cambia la politica despues, el socio sigue viendo que regla se
       le aplico
-- [ ] `amount_refunded_cents` se actualiza y nunca supera `price_cents` (garantizado por
+- [x] `amount_refunded_cents` se actualiza y nunca supera `price_cents` (garantizado por
       `check`)
-- [ ] `payment_status` pasa a `'refunded'`
-- [ ] **El slot se libera**: la reserva queda `cancelled` y el `EXCLUDE` deja de bloquear.
+- [x] `payment_status` pasa a `'refunded'`
+- [x] **El slot se libera**: la reserva queda `cancelled` y el `EXCLUDE` deja de bloquear.
       Test explicito: la pista vuelve a estar disponible
 - [ ] La reserva cancelada desaparece de "mis reservas" activas y pasa al historico
-- [ ] **Cancelar dos veces no devuelve el doble.** El segundo intento devuelve 409
-- [ ] Cancelar una reserva ya pasada no reembolsa. Si `starts_at` ya ocurrio, 422
-- [ ] El reembolso se hace contra el **PaymentIntent real** de Stripe, no contra el
+      *(pantalla: T18b, no es de T14b)*
+- [x] **Cancelar dos veces no devuelve el doble.** El segundo intento devuelve 409
+- [x] Cancelar una reserva ya pasada no reembolsa. Si `starts_at` ya ocurrio, 422
+- [x] El reembolso se hace contra el **PaymentIntent real** de Stripe, no contra el
       `price_cents` local
-- [ ] Test de integracion de los 5 casos de la tabla: 25h->100%, 24h->100%, 20h->50%,
+- [x] Test de integracion de los 5 casos de la tabla: 25h->100%, 24h->100%, 20h->50%,
       12h->50%, 5h->0%. **El importe devuelto por Stripe coincide con el del motor**
+- [x] `payment_status` sigue `'paid'` con un tramo del 0% (nunca `refunded` sin dinero,
+      T14b-H)
 
-**Verificacion:** tests de endpoint contra Stripe CLI · test de que cancelar dos veces no
+**Verificacion:** tests de endpoint con cliente de Stripe **falso** inyectado contra
+Postgres real (45 tests DB nuevos entre E1, E2 y E3) · test de que cancelar dos veces no
 duplica el reembolso · test de que el slot se libera · la tabla de 5 casos pasando de
-`computeRefund` (T8) hasta el reembolso real de Stripe
+`computeRefund` (T8) hasta la llamada a `stripe.refunds.create` · E2E contra Stripe CLI
+**pendiente de las keys de test del usuario** (mismo bloqueo que C5 de T13 y el E2E de T14)
 
 **Depende de:** T14 (el booking tiene que estar confirmado y pagado) · **Alcance:** M
 
 ---
 
 ### Checkpoint 3b: Reembolso
-- [ ] **Cancelar una reserva pagada devuelve el importe del tramo correcto, verificado
-      de punta a punta contra Stripe** (no solo la funcion pura de T8)
-- [ ] Los 5 casos de la tabla de tramos pasan de `computeRefund` al reembolso real
-- [ ] El snapshot (`refund_tier_hours_before`, `refund_percent_applied`) queda en el booking
-- [ ] Cancelar dos veces no devuelve el doble
-- [ ] El slot se libera y la pista vuelve a estar disponible
+- [x] **Cancelar una reserva pagada devuelve el importe del tramo correcto, verificado
+      de punta a punta** (el motor T8 -> fila -> `stripe.refunds.create` con cliente falso;
+      lo unico que queda sin automating es la llamada real a Stripe)
+- [x] Los 5 casos de la tabla de tramos pasan de `computeRefund` al reembolso que pide el
+      cliente de Stripe
+- [x] El snapshot (`refund_tier_hours_before`, `refund_percent_applied`) queda en el booking
+- [x] Cancelar dos veces no devuelve el doble
+- [x] El slot se libera y la pista vuelve a estar disponible
 - [ ] **Revision humana antes de seguir**
 
 ---
