@@ -51,6 +51,11 @@ export interface StripeConnectClient {
   recuperarPaymentIntent(
     paymentIntentId: string,
   ): Promise<{ paymentIntentId: string; clientSecret: string }>;
+  crearReembolso(input: {
+    paymentIntentId: string;
+    amountCents: number;
+    idempotencyKey: string;
+  }): Promise<{ refundId: string }>;
 }
 
 /**
@@ -139,6 +144,20 @@ export function crearClienteStripe(): StripeConnectClient {
         );
       }
       return { paymentIntentId: intent.id, clientSecret: secreto };
+    },
+    crearReembolso: async (input) => {
+      // T14b: el reembolso va contra el PaymentIntent de la reserva. La
+      // Idempotency-Key por booking hace que la cancelacion y el reintento del
+      // gestor compartan el MISMO refund (Stripe reusa el del primer intento), asi
+      // que un reembolso duplicado por una carrera no mueve dinero dos veces.
+      const reembolso = await stripe.refunds.create(
+        {
+          payment_intent: input.paymentIntentId,
+          amount: input.amountCents,
+        },
+        { idempotencyKey: input.idempotencyKey },
+      );
+      return { refundId: reembolso.id };
     },
   };
 }

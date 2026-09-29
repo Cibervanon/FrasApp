@@ -51,6 +51,7 @@ function clienteFalso(): StripeConnectClient & {
       paymentIntentId: id,
       clientSecret: "sk_falso_t13",
     })),
+    crearReembolso: vi.fn(async () => ({ refundId: "re_falso_t13" })),
   };
 }
 

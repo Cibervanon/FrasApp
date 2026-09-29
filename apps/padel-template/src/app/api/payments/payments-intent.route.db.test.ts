@@ -66,6 +66,8 @@ function clienteFalso() {
       obtenerCuenta: vi.fn(async () => ({ chargesEnabled: true, payoutsEnabled: false })),
       crearPaymentIntent,
       recuperarPaymentIntent,
+      // T14b: las rutas de pago no reembolsan, pero el contrato lo exige.
+      crearReembolso: vi.fn(async () => ({ refundId: "re_falso" })),
     } satisfies StripeConnectClient & {
       crearPaymentIntent: ReturnType<typeof vi.fn>;
       recuperarPaymentIntent: ReturnType<typeof vi.fn>;
